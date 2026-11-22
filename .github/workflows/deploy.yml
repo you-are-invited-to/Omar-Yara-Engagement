@@ -1,0 +1,70 @@
+name: Deploy Customer Invitation Site
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: 'pages'
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies (resolve Linux native Rolldown/Vite 8 bindings)
+        run: rm -f package-lock.json && npm install --no-audit --no-fund
+
+      - name: Build production bundle from GitHub Actions Secrets
+        run: npm run build
+        env:
+          NODE_ENV: production
+          VITE_BASE_PATH: ${{ secrets.VITE_BASE_PATH || format('/{0}/', github.event.repository.name) }}
+          VITE_CUSTOMER_SLUG: ${{ secrets.VITE_CUSTOMER_SLUG || github.event.repository.name }}
+          VITE_FIREBASE_ENABLED: ${{ secrets.VITE_FIREBASE_ENABLED || 'true' }}
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
+          VITE_OG_TITLE: ${{ secrets.VITE_OG_TITLE }}
+          VITE_OG_DESCRIPTION: ${{ secrets.VITE_OG_DESCRIPTION }}
+          VITE_OG_IMAGE: ${{ secrets.VITE_OG_IMAGE }}
+          VITE_SITE_URL: ${{ secrets.VITE_SITE_URL }}
+
+      - name: Verify bundle security (zero leaked privileged secrets)
+        run: node scripts/verify-stage-a.mjs --bundle-only
+
+      - name: Push dist to gh-pages branch
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
+
+      - name: Publish directly to GitHub Pages URL
+        id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
