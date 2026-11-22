@@ -10,9 +10,9 @@ const groom = {
   "name": "عمر",
   "nameEn": "Omar",
   "familyTitleAr": "عائلة مكرم",
-  "familyTitleEn": "The Kouta Family",
-  "father": " مكرم",
-  "fatherEn": "Mohamed Kouta",
+  "familyTitleEn": "The Makram Family",
+  "father": " عبد المنعم",
+  "fatherEn": "Abdelmnam Makram",
   "mother": "",
   "motherEn": "",
   "showMother": false
@@ -75,9 +75,9 @@ const weddingConfig = {
       "date": "2026-11-24",
       "dateDisplay": "٢٤ نوفمبر ٢٠٢٦",
       "dateDisplayEn": "24 November 2026",
-      "dayAr": "الجمعة",
-      "dayEn": "Friday",
-      "time": "8:٠٠ مساءً",
+      "dayAr": "الثلاثاء",
+      "dayEn": "Tuesday",
+      "time": "٨:٠٠ مساءً",
       "timeEn": "8:00 PM",
       "dateTime": "2026-11-24T20:00:00+02:00",
       "timezone": "Africa/Cairo",
@@ -98,7 +98,7 @@ const weddingConfig = {
       "descriptionAr": "بجوار مجمع النوادي ",
       "descriptionEn": "Next to the Clubs Complex",
       "mapsUrl": "https://maps.app.goo.gl/b3DrdBeZVCakCNTr5?g_st=ic",
-      "mapsEmbedUrl": "https://maps.app.goo.gl/b3DrdBeZVCakCNTr5?g_st=ic"
+      "mapsEmbedUrl": "https://www.google.com/maps/place/%D9%82%D8%A7%D8%B9%D8%A9+%D8%A8%D8%A7%D8%AA%D8%B1%D9%88%D8%B3+%D8%AC%D8%A7%D8%B1%D8%AF%D9%86+%7C+Batros+Garden%E2%80%AD/@31.2750649,32.2631073,17z/data=!3m1!4b1!4m6!3m5!1s0x14f99dbd55e09f0f:0xef0bac4e358f865c!8m2!3d31.2750603!4d32.2656876!16s%2Fg%2F11sqf4w3ck?entry=ttu&g_ep=EgoyMDI2MTExOC4xIKXMDSoASAFQAw%3D%3D"
   },
 
   /**
@@ -121,36 +121,6 @@ const weddingConfig = {
               "id": "1",
               "url": "",
               "alt": "Couple photo 1",
-              "aspectRatio": "portrait"
-          },
-          {
-              "id": "2",
-              "url": "",
-              "alt": "Couple photo 2",
-              "aspectRatio": "landscape"
-          },
-          {
-              "id": "3",
-              "url": "",
-              "alt": "Couple photo 3",
-              "aspectRatio": "portrait"
-          },
-          {
-              "id": "4",
-              "url": "",
-              "alt": "Couple photo 4",
-              "aspectRatio": "square"
-          },
-          {
-              "id": "5",
-              "url": "",
-              "alt": "Couple photo 5",
-              "aspectRatio": "landscape"
-          },
-          {
-              "id": "6",
-              "url": "",
-              "alt": "Couple photo 6",
               "aspectRatio": "portrait"
           }
       ]
