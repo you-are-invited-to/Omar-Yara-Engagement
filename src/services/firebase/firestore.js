@@ -65,26 +65,26 @@ export const submitRSVP = async (data) => {
   try {
     // 1. Write private RSVP record (contains phone & attendance) to 'rsvps' collection
     const docRef = await addDoc(collection(db, 'rsvps'), {
-      name:          trimmedName,
-      phone:         String(data.phone || '').trim(),
-      guestsCount:   Number(data.guestsCount) || 0,
-      attendance:    data.attendance || 'will_attend',
-      message:       trimmedMessage,
+      name: trimmedName,
+      phone: String(data.phone || '').trim(),
+      guestsCount: Number(data.guestsCount) || 0,
+      attendance: data.attendance || 'will_attend',
+      message: trimmedMessage,
       customAnswers: data.customAnswers || {},
-      language:      data.language || 'ar',
+      language: data.language || 'ar',
       invitationId,
-      createdAt:     serverTimestamp(),
+      createdAt: serverTimestamp(),
     });
 
     // 2. If guest included a wish message, write a PII-free record to public 'wishes' collection (SEC-005)
     if (trimmedMessage.length > 0) {
       try {
         await addDoc(collection(db, 'wishes'), {
-          name:         trimmedName,
-          message:      trimmedMessage,
-          rsvpId:       docRef.id,
+          name: trimmedName,
+          message: trimmedMessage,
+          rsvpId: docRef.id,
           invitationId,
-          createdAt:    serverTimestamp(),
+          createdAt: serverTimestamp(),
         });
       } catch (wishErr) {
         console.warn('[FirebaseService] Public wish mirror skipped:', wishErr);
@@ -341,7 +341,9 @@ export const getWeddingConfigFirestore = async () => {
 export const saveWeddingConfigFirestore = async (config) => {
   try {
     const docRef = doc(db, 'config', 'wedding');
-    await setDoc(docRef, { ...config, updatedAt: serverTimestamp() }, { merge: true });
+    // Strip undefined fields so Firestore setDoc never rejects optional keys
+    const sanitizedConfig = JSON.parse(JSON.stringify(config || {}));
+    await setDoc(docRef, { ...sanitizedConfig, updatedAt: serverTimestamp() }, { merge: true });
     return { success: true };
   } catch (error) {
     console.error('[FirebaseService] Save wedding config failed:', error);
@@ -366,7 +368,7 @@ export const subscribeWeddingConfigFirestore = (onUpdate, onError) => {
     );
   } catch (error) {
     console.error('[FirebaseService] Subscribe wedding config failed:', error);
-    return () => {};
+    return () => { };
   }
 };
 
@@ -412,7 +414,7 @@ export const reserveWishlistItem = async (itemId, guestName) => {
     // 2. Also attempt to update standalone wishlist collection document if it exists
     const itemRef = doc(db, 'wishlist', itemId);
     await updateDoc(itemRef, {
-      status:     'reserved',
+      status: 'reserved',
       reservedBy: guestName,
       reservedAt: serverTimestamp(),
     });

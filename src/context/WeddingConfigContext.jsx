@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import {
   getActiveConfig,
   saveActiveConfig,
+  getStaticConfigHash,
   CONFIG_UPDATE_EVENT,
   mergeConfig,
 } from '../utils/configManager.js';
@@ -57,40 +58,51 @@ export const WeddingConfigProvider = ({ children }) => {
 
     // 3. Cross-tab storage event (e.g. admin panel updated in another tab)
     const handleStorageEvent = (e) => {
-      if (!e.key || e.key === 'wedding_config_override' || e.key === 'wedding_active_theme') {
-        if (e.key === 'wedding_config_override' && e.newValue) {
-          try {
-            const parsed = JSON.parse(e.newValue);
-            syncState(parsed);
-            return;
-          } catch {
+          if (
+            !e.key ||
+            e.key.startsWith('wedding_config_override') ||
+            e.key.startsWith('wedding_active_theme')
+          ) {
+            if (e.key?.startsWith('wedding_config_override') && e.newValue) {
+              try {
+                const parsed = JSON.parse(e.newValue);
+                syncState(parsed);
+                return;
+              } catch {
+                syncState(null);
+                return;
+              }
+            }
             syncState(null);
-            return;
           }
-        }
-        syncState(null);
-      }
-    };
-    window.addEventListener('storage', handleStorageEvent);
+        };
+        window.addEventListener('storage', handleStorageEvent);
 
     // 4. Real-time Firebase Firestore listener
     const unsubscribeFirestore = subscribeWeddingConfigFromDB((cloudConfig) => {
       if (cloudConfig && typeof cloudConfig === 'object') {
+        // Do not overwrite a newly deployed weddingConfig.js with a stale Firestore snapshot
+        if (cloudConfig._staticConfigHash !== getStaticConfigHash()) {
+          console.info(
+            '[WeddingConfigProvider] Ignoring stale Firestore config snapshot pending sync for updated weddingConfig.js'
+          );
+          return;
+        }
         console.info('[WeddingConfigProvider] Live config update received from Firestore DB');
         saveActiveConfig(cloudConfig);
         syncState(cloudConfig);
       }
     });
 
-    return () => {
-      window.removeEventListener(CONFIG_UPDATE_EVENT, handleCustomEvent);
-      window.removeEventListener(THEME_PREVIEW_EVENT, handlePreviewEvent);
-      window.removeEventListener('storage', handleStorageEvent);
-      if (typeof unsubscribeFirestore === 'function') {
-        unsubscribeFirestore();
-      }
-    };
-  }, []);
+        return () => {
+          window.removeEventListener(CONFIG_UPDATE_EVENT, handleCustomEvent);
+          window.removeEventListener(THEME_PREVIEW_EVENT, handlePreviewEvent);
+          window.removeEventListener('storage', handleStorageEvent);
+          if (typeof unsubscribeFirestore === 'function') {
+            unsubscribeFirestore();
+          }
+        };
+      }, []);
 
   return (
     <WeddingConfigContext.Provider value={config}>
@@ -115,20 +127,24 @@ export const useWeddingConfig = () => {
     };
 
     const handleStorage = (e) => {
-      if (!e.key || e.key === 'wedding_config_override' || e.key === 'wedding_active_theme') {
-        setFallbackConfig(resolveConfigWithPreview());
-      }
-    };
+        if (
+          !e.key ||
+          e.key.startsWith('wedding_config_override') ||
+          e.key.startsWith('wedding_active_theme')
+        ) {
+          setFallbackConfig(resolveConfigWithPreview());
+        }
+      };
 
-    window.addEventListener(CONFIG_UPDATE_EVENT, syncFallback);
-    window.addEventListener(THEME_PREVIEW_EVENT, syncFallback);
-    window.addEventListener('storage', handleStorage);
-    return () => {
-      window.removeEventListener(CONFIG_UPDATE_EVENT, syncFallback);
-      window.removeEventListener(THEME_PREVIEW_EVENT, syncFallback);
-      window.removeEventListener('storage', handleStorage);
-    };
-  }, [context]);
+      window.addEventListener(CONFIG_UPDATE_EVENT, syncFallback);
+      window.addEventListener(THEME_PREVIEW_EVENT, syncFallback);
+      window.addEventListener('storage', handleStorage);
+      return () => {
+        window.removeEventListener(CONFIG_UPDATE_EVENT, syncFallback);
+        window.removeEventListener(THEME_PREVIEW_EVENT, syncFallback);
+        window.removeEventListener('storage', handleStorage);
+      };
+    }, [context]);
 
   return context || fallbackConfig;
 };

@@ -5,6 +5,7 @@ import weddingConfig from '../../config/weddingConfig';
 import useWeddingConfig from '../../hooks/useWeddingConfig';
 import { getThemeById } from '../../config/themesConfig';
 import { getEventTypeById } from '../../config/eventTypesConfig';
+import { syncAgendaWithStartTime } from '../../utils/agendaUtils';
 import SectionWrapper from '../ui/SectionWrapper';
 import OrnamentDivider from '../ui/OrnamentDivider';
 import { ThemeHeaderCrest } from '../ui/ThemeVisuals';
@@ -90,45 +91,6 @@ const DetailThemeIcon = ({ type, activeTheme }) => {
   return null;
 };
 
-const DEFAULT_GOLDEN_AGENDA = [
-  {
-    id: 'ag-1',
-    timeAr: '٥:٠٠ مساءً',
-    timeEn: '5:00 PM',
-    titleAr: 'استقبال الضيوف والترحيب',
-    titleEn: 'Guest Arrival & Welcome Drinks',
-    descriptionAr: 'بداية التجمع واستقبال الأحبة في القاعة',
-    descriptionEn: 'Welcome reception and music as guests arrive',
-  },
-  {
-    id: 'ag-2',
-    timeAr: '٦:٣٠ مساءً',
-    timeEn: '6:30 PM',
-    titleAr: 'دخول العروسين وبدء المراسم',
-    titleEn: 'Grand Entrance & Ceremony',
-    descriptionAr: 'لحظة الدخول وبداية مراسم الاحتفال الرسمية',
-    descriptionEn: 'The grand entrance and official celebration ceremony',
-  },
-  {
-    id: 'ag-3',
-    timeAr: '٨:٣٠ مساءً',
-    timeEn: '8:30 PM',
-    titleAr: 'مأدبة العشاء وتقطيع الكيك',
-    titleEn: 'Dinner Reception & Cake Cutting',
-    descriptionAr: 'مشاركة العشاء الاحتفالي واللحظات السعيدة',
-    descriptionEn: 'Celebratory dinner, toasts, and cake cutting',
-  },
-  {
-    id: 'ag-4',
-    timeAr: '١٠:٠٠ مساءً',
-    timeEn: '10:00 PM',
-    titleAr: 'سهرة الاحتفال والرقص',
-    titleEn: 'Evening Celebration & Dancing',
-    descriptionAr: 'أجمل الأوقات الموسيقية والاحتفال حتى الختام',
-    descriptionEn: 'Music, joy, and dancing under the lights',
-  },
-];
-
 const WeddingDetails = () => {
   const { t, i18n } = useTranslation();
   const lang = i18n.language;
@@ -139,9 +101,9 @@ const WeddingDetails = () => {
 
   if (liveConfig.sections?.details?.enabled === false) return null;
 
-  const day  = isAr ? liveConfig.wedding?.dayAr  : liveConfig.wedding?.dayEn;
+  const day = isAr ? liveConfig.wedding?.dayAr : liveConfig.wedding?.dayEn;
   const date = isAr ? liveConfig.wedding?.dateDisplay : liveConfig.wedding?.dateDisplayEn;
-  const time = isAr ? liveConfig.wedding?.time  : liveConfig.wedding?.timeEn;
+  const time = isAr ? liveConfig.wedding?.time : liveConfig.wedding?.timeEn;
 
   const secCfg = liveConfig.sections?.details || {};
   const eventMeta = getEventTypeById(liveConfig.eventType);
@@ -155,16 +117,13 @@ const WeddingDetails = () => {
   const sectionSubtitle = isAr ? secCfg.subtitleAr : secCfg.subtitleEn;
   const isGoldenTheme = activeTheme === 'golden-theme';
   const configuredAgenda = Array.isArray(liveConfig.agenda) ? liveConfig.agenda : [];
-  const agendaList =
-    configuredAgenda.length > 0
-      ? configuredAgenda
-      : isGoldenTheme
-        ? DEFAULT_GOLDEN_AGENDA
-        : [];
+  const agendaList = syncAgendaWithStartTime(configuredAgenda, liveConfig.wedding, {
+    useGoldenDefaults: isGoldenTheme,
+  });
 
   const fadeUp = {
     hidden: { opacity: 0, y: 25 },
-    show:   { opacity: 1, y: 0 },
+    show: { opacity: 1, y: 0 },
   };
 
   return (

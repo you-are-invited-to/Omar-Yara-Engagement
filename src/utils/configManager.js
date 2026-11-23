@@ -13,6 +13,8 @@ import {
   isValidEventTypeId,
   getEventTypeById,
 } from '../config/eventTypesConfig.js';
+import { normalizeDressCodeByEventType } from '../config/dressCodeConfig.js';
+import { syncAgendaWithStartTime } from './agendaUtils.js';
 import { getScopedStorageKey } from './security.js';
 
 export {
@@ -31,6 +33,35 @@ export const CONFIG_UPDATE_EVENT = 'wedding_config_changed';
  * Deep clone an object safely
  */
 export const clone = (obj) => JSON.parse(JSON.stringify(obj));
+
+/**
+ * Deterministic fingerprint of the bundled static `src/config/weddingConfig.js`.
+ * Used to detect when a new `weddingConfig.js` has been pushed to GitHub & deployed,
+ * so Firestore `config/wedding` and browser localStorage automatically update to the
+ * newly deployed config while still preserving Admin UI edits when `weddingConfig.js`
+ * has not changed.
+ */
+export const computeConfigHash = (obj) => {
+  const str = JSON.stringify(obj || {});
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    h1 ^= c;
+    h1 = Math.imul(h1, 0x01000193);
+    h2 ^= c + i;
+    h2 = Math.imul(h2, 0x85ebca6b);
+  }
+  return `${(h1 >>> 0).toString(16).padStart(8, '0')}${(h2 >>> 0).toString(16).padStart(8, '0')}`;
+};
+
+let _cachedStaticConfigHash = null;
+export const getStaticConfigHash = () => {
+  if (!_cachedStaticConfigHash) {
+    _cachedStaticConfigHash = computeConfigHash(weddingConfig);
+  }
+  return _cachedStaticConfigHash;
+};
 
 /**
  * Normalizes sectionOrder so all built-in sections and any customSections are present
@@ -131,11 +162,21 @@ export const mergeConfig = (override) => {
     const defaultEventType = isValidEventTypeId(weddingConfig.eventType)
       ? weddingConfig.eventType
       : DEFAULT_EVENT_TYPE_ID;
+    const defaultDressCode = {
+      ...weddingConfig.dressCode,
+      byEventType: normalizeDressCodeByEventType(weddingConfig.dressCode?.byEventType),
+    };
+    const defaultAgenda =
+      Array.isArray(weddingConfig.agenda) && weddingConfig.agenda.length > 0
+        ? syncAgendaWithStartTime(weddingConfig.agenda, weddingConfig.wedding)
+        : [];
     return {
       ...weddingConfig,
       eventType: defaultEventType,
       eventMeta: getEventTypeById(defaultEventType),
       theme: resolvedTheme,
+      dressCode: defaultDressCode,
+      agenda: defaultAgenda,
       sectionOrder: normalizeSectionOrder(weddingConfig.sectionOrder, weddingConfig.customSections),
     };
   }
@@ -153,7 +194,23 @@ export const mergeConfig = (override) => {
   const resolvedTheme = isValidThemeId(candidateTheme) ? candidateTheme : DEFAULT_THEME_ID;
 
   const gallery = { ...weddingConfig.gallery, ...(override.gallery || {}) };
-  const dressCode = { ...weddingConfig.dressCode, ...(override.dressCode || {}) };
+  const mergedByEventType = normalizeDressCodeByEventType({
+    ...(weddingConfig.dressCode?.byEventType || {}),
+    ...(override.dressCode?.byEventType || {}),
+  });
+  const dressCode = {
+    ...weddingConfig.dressCode,
+    ...(override.dressCode || {}),
+    byEventType: mergedByEventType,
+  };
+  const mergedWedding = { ...weddingConfig.wedding, ...(override.wedding || {}) };
+  const rawAgenda = Array.isArray(override.agenda)
+    ? override.agenda
+    : Array.isArray(weddingConfig.agenda)
+      ? weddingConfig.agenda
+      : [];
+  const syncedAgenda =
+    rawAgenda.length > 0 ? syncAgendaWithStartTime(rawAgenda, mergedWedding) : [];
   const wishlist = {
     ...weddingConfig.wishlist,
     ...(override.wishlist || {}),
@@ -194,8 +251,8 @@ export const mergeConfig = (override) => {
     groom,
     bride,
     honoree: override.honoree || weddingConfig.honoree || null,
-    agenda: Array.isArray(override.agenda) ? override.agenda : (weddingConfig.agenda || []),
-    wedding: { ...weddingConfig.wedding, ...(override.wedding || {}) },
+    agenda: syncedAgenda,
+    wedding: mergedWedding,
     venue: { ...weddingConfig.venue, ...(override.venue || {}) },
     music: { ...weddingConfig.music, ...(override.music || {}) },
     gallery,
@@ -301,7 +358,18 @@ export const getActiveConfig = (override = null) => {
       return mergeConfig(null);
     }
 
-    return mergeConfig(JSON.parse(stored));
+    const parsed = JSON.parse(stored);
+    // If a newer weddingConfig.js was pushed & deployed, ignore stale cached localStorage overrides
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      parsed._staticConfigHash &&
+      parsed._staticConfigHash !== getStaticConfigHash()
+    ) {
+      return mergeConfig(null);
+    }
+
+    return mergeConfig(parsed);
   } catch (err) {
     console.error('[ConfigManager] Failed to load config overrides:', err);
     return mergeConfig(null);
@@ -313,7 +381,10 @@ export const getActiveConfig = (override = null) => {
  */
 export const saveActiveConfig = (newConfig) => {
   try {
-    const merged = mergeConfig(newConfig);
+    const merged = {
+      ...mergeConfig(newConfig),
+      _staticConfigHash: newConfig?._staticConfigHash || getStaticConfigHash(),
+    };
     const resolvedTheme = isValidThemeId(merged?.theme) ? merged.theme : DEFAULT_THEME_ID;
 
     if (typeof localStorage !== 'undefined') {
@@ -334,28 +405,52 @@ export const saveActiveConfig = (newConfig) => {
 };
 
 /**
- * Synchronizes configuration with Firestore as the 1st Priority.
- * If Firestore has a config document -> merges and sets as active.
- * If Firestore has NO config document yet -> preserves local overrides (or default weddingConfig) and uploads to Firestore if enabled.
+ * Synchronizes configuration with Firestore.
+ * - If Firestore has a config matching the currently deployed `weddingConfig.js` hash ->
+ *   Firestore wins (preserving live Admin UI edits without requiring a new GitHub push).
+ * - If Firestore has NO config yet OR a newly updated `weddingConfig.js` was pushed to
+ *   GitHub and reloaded -> applies the fresh `weddingConfig.js` immediately and updates
+ *   Firestore `config/wedding` with the new configuration and `_staticConfigHash`.
  */
-export const syncConfigWithFirestore = async (getWeddingConfigFromDB, saveWeddingConfigToDB) => {
+export const syncConfigWithFirestore = async (
+  getWeddingConfigFromDB,
+  saveWeddingConfigToDB,
+  { forceFirebaseEnabled = null } = {}
+) => {
+  const currentStaticHash = getStaticConfigHash();
   try {
     const cloudConfig = await getWeddingConfigFromDB();
-    if (cloudConfig && Object.keys(cloudConfig).length > 0) {
-      console.info('[ConfigManager] Priority 1: Loaded wedding config from Firestore DB');
+    const hasCloudConfig = cloudConfig && Object.keys(cloudConfig).length > 0;
+    const isCloudSyncedToCurrentStatic =
+      hasCloudConfig && cloudConfig._staticConfigHash === currentStaticHash;
+
+    if (isCloudSyncedToCurrentStatic) {
+      console.info('[ConfigManager] Priority 1: Loaded live wedding config from Firestore DB');
       saveActiveConfig(cloudConfig);
       return getActiveConfig(cloudConfig);
-    } else {
-      const currentActive = getActiveConfig();
-      applyThemeToDOM(currentActive.theme);
-
-      const firebaseEnabled = import.meta?.env?.VITE_FIREBASE_ENABLED === 'true';
-      if (firebaseEnabled && saveWeddingConfigToDB) {
-        console.info('[ConfigManager] No config in Firestore yet. Uploading weddingConfig to Firestore...');
-        await saveWeddingConfigToDB(currentActive);
-      }
-      return currentActive;
     }
+
+    // Newly pushed weddingConfig.js detected (or initial Firestore seed needed)
+    const freshStaticConfig = {
+      ...mergeConfig(null),
+      _staticConfigHash: currentStaticHash,
+    };
+    saveActiveConfig(freshStaticConfig);
+
+    const firebaseEnabled =
+      forceFirebaseEnabled !== null
+        ? Boolean(forceFirebaseEnabled)
+        : import.meta?.env?.VITE_FIREBASE_ENABLED === 'true';
+
+    if (firebaseEnabled && saveWeddingConfigToDB) {
+      console.info(
+        hasCloudConfig
+          ? '[ConfigManager] Deployed weddingConfig.js changed — updating Firestore config/wedding...'
+          : '[ConfigManager] No config in Firestore yet — uploading weddingConfig.js to Firestore...'
+      );
+      await saveWeddingConfigToDB(freshStaticConfig);
+    }
+    return freshStaticConfig;
   } catch (err) {
     console.warn('[ConfigManager] Firestore config sync skipped (using local/fallback):', err);
     const fallback = getActiveConfig();
@@ -405,6 +500,7 @@ export const generateConfigFileContent = (cfg) => {
   const sharing = merged.sharing || weddingConfig.sharing;
   const meta = merged.meta || weddingConfig.meta;
   const analytics = merged.analytics || weddingConfig.analytics;
+  const agenda = Array.isArray(merged.agenda) ? merged.agenda : [];
   const theme = isValidThemeId(merged.theme) ? merged.theme : DEFAULT_THEME_ID;
 
   return `/**
@@ -448,7 +544,7 @@ const weddingConfig = {
   /**
    * ─── WEDDING DATE & TIME ─────────────────────────────────
    */
-  wedding: ${JSON.stringify(wedding, null, 4).replace(/\n/g, '\n  ')},
+  wedding: ${JSON.stringify(wedding, null, 4).replace(/\n/g, '\n  ')},${agenda.length > 0 ? `\n\n  /**\n   * ─── EVENT AGENDA ────────────────────────────────────────\n   */\n  agenda: ${JSON.stringify(agenda, null, 4).replace(/\n/g, '\n  ')},` : ''}
 
   /**
    * ─── VENUE ───────────────────────────────────────────────
@@ -492,16 +588,16 @@ const weddingConfig = {
    */
   sharing: {
     url: ${JSON.stringify(sharing.url || "https://hamdyKouta1.github.io/invitation/")},
-    messageAr: \`🎉 دعوة زفاف \${groom.name} و\${bride.name} — شاركونا فرحتنا! {url}\`,
-    messageEn: \`🎉 \${groom.nameEn} & \${bride.nameEn}'s Wedding Invitation — Join us on our special day! {url}\`,
+    messageAr: ${JSON.stringify(sharing.messageAr || `🎉 دعوة زفاف ${groom.name} و${bride.name} — شاركونا فرحتنا! {url}`)},
+    messageEn: ${JSON.stringify(sharing.messageEn || `🎉 ${groom.nameEn} & ${bride.nameEn}'s Wedding Invitation — Join us on our special day! {url}`)},
   },
 
   /**
    * ─── SEO & META ───────────────────────────────────────────
    */
   meta: {
-    titleAr: \`دعوة زفاف \${groom.name} و\${bride.name}\`,
-    titleEn: \`\${groom.nameEn} & \${bride.nameEn}'s Wedding Invitation\`,
+    titleAr: ${JSON.stringify(meta.titleAr || `دعوة زفاف ${groom.name} و${bride.name}`)},
+    titleEn: ${JSON.stringify(meta.titleEn || `${groom.nameEn} & ${bride.nameEn}'s Wedding Invitation`)},
     descriptionAr: ${JSON.stringify(meta.descriptionAr || "يسعدنا دعوتكم لمشاركتنا فرحة زفافنا في بورسعيد")},
     descriptionEn: ${JSON.stringify(meta.descriptionEn || "We joyfully invite you to celebrate our wedding in Port Said")},
     ogImageUrl: ${JSON.stringify(meta.ogImageUrl || "https://hamdyKouta1.github.io/invitation/og-image.jpg")},

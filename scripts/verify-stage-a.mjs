@@ -34,19 +34,19 @@ globalThis.document = {
   documentElement: {
     setAttribute: (k, v) => domAttributes.set(k, v),
     getAttribute: (k) => domAttributes.get(k),
-    classList: { add: () => {}, remove: () => {} },
+    classList: { add: () => { }, remove: () => { } },
   },
-  body: { setAttribute: () => {} },
-  head: { appendChild: () => {} },
+  body: { setAttribute: () => { } },
+  head: { appendChild: () => { } },
   getElementById: () => null,
   createElement: () => ({}),
   querySelector: () => null,
 };
 
 globalThis.window = {
-  dispatchEvent: () => {},
-  addEventListener: () => {},
-  removeEventListener: () => {},
+  dispatchEvent: () => { },
+  addEventListener: () => { },
+  removeEventListener: () => { },
 };
 globalThis.CustomEvent = class CustomEvent {
   constructor(type, options = {}) {
@@ -70,6 +70,11 @@ if (fs.existsSync(distAssetsDir)) {
     'wedding_admin_2fa_auth',
     'wedding_admin_otp_session',
     'x-api-secret',
+    'BEGIN PRIVATE KEY',
+    'FIREBASE_SERVICE_ACCOUNT',
+    'private_key_id',
+    'ghp_',
+    'github_pat_',
   ];
 
   for (const file of jsFiles) {
@@ -110,12 +115,34 @@ const { WEDDING_THEMES, isValidThemeId } = await import(
   'file:///' + path.join(projectRoot, 'src/config/themesConfig.js').replace(/\\/g, '/')
 );
 
+const { default: baseWeddingConfig } = await import(
+  'file:///' + path.join(projectRoot, 'src/config/weddingConfig.js').replace(/\\/g, '/')
+);
+
+const {
+  buildUpdatedWeddingTime,
+  syncAgendaWithStartTime,
+  getEventStartTime24h,
+  createNextAgendaItem,
+} = await import('file:///' + path.join(projectRoot, 'src/utils/agendaUtils.js').replace(/\\/g, '/'));
+
+const {
+  WEDDING_LADIES_BROWN_SHADES,
+  resolveDressCodeForDisplay,
+} = await import('file:///' + path.join(projectRoot, 'src/config/dressCodeConfig.js').replace(/\\/g, '/'));
+
 const {
   mergeConfig,
   getActiveConfig,
   saveActiveConfig,
   resetActiveConfig,
+  getStaticConfigHash,
+  syncConfigWithFirestore,
 } = await import('file:///' + path.join(projectRoot, 'src/utils/configManager.js').replace(/\\/g, '/'));
+
+const { toFirestoreFields } = await import(
+  'file:///' + path.join(projectRoot, 'scripts/sync-wedding-config-to-firestore.mjs').replace(/\\/g, '/')
+);
 
 const mockService = await import(
   'file:///' + path.join(projectRoot, 'src/services/mock/mockService.js').replace(/\\/g, '/')
@@ -266,15 +293,201 @@ for (const th of WEDDING_THEMES) {
   assert.ok(isValidThemeId(th.id));
 }
 
-// Verify backward compatibility with default Hamdy & Rodina weddingConfig.js
+// Verify reset restores active weddingConfig.js defaults cleanly
 globalThis.localStorage.clear();
 resetActiveConfig();
-const defaultHamdyConfig = getActiveConfig();
-assert.equal(defaultHamdyConfig.eventType, 'wedding');
-assert.equal(defaultHamdyConfig.theme, 'default');
-assert.equal(defaultHamdyConfig.groom.nameEn, 'Hamdy');
-assert.equal(defaultHamdyConfig.bride.nameEn, 'Rodina');
-console.log('✅ [Phase 3] All 10 Event Types, 5 Visual Themes, and Hamdy & Rodina backward compatibility verified.');
+const defaultRepoConfig = getActiveConfig();
+assert.equal(defaultRepoConfig.eventType, baseWeddingConfig.eventType);
+assert.equal(defaultRepoConfig.theme, baseWeddingConfig.theme);
+assert.equal(defaultRepoConfig.groom.nameEn, baseWeddingConfig.groom.nameEn);
+assert.equal(defaultRepoConfig.bride.nameEn, baseWeddingConfig.bride.nameEn);
+console.log('✅ [Phase 3] All 10 Event Types, 6 Visual Themes, and base config defaults verified.');
+
+// ─── 5. Dynamic Event Agenda Start Time Tests ─────────────────────────
+{
+  // 5a. Golden agenda defaults automatically start at configured event start time (8:00 PM)
+  const goldenAgenda8pm = syncAgendaWithStartTime([], { timeEn: '8:00 PM', time: '٨:٠٠ مساءً' }, { useGoldenDefaults: true });
+  assert.equal(goldenAgenda8pm.length, 4);
+  assert.equal(goldenAgenda8pm[0].timeEn, '8:00 PM', 'First agenda item must match 8:00 PM start time');
+  assert.equal(goldenAgenda8pm[0].timeAr, '٨:٠٠ مساءً');
+  assert.equal(goldenAgenda8pm[1].timeEn, '9:30 PM');
+  assert.equal(goldenAgenda8pm[2].timeEn, '11:30 PM');
+  assert.equal(goldenAgenda8pm[3].timeEn, '1:00 AM');
+
+  // 5b. Updating start time preserves valid subsequent items
+  const customAgenda = [
+    { id: '1', timeEn: '8:00 PM', timeAr: '٨:٠٠ مساءً', titleEn: 'Arrival' },
+    { id: '2', timeEn: '9:30 PM', timeAr: '٩:٣٠ مساءً', titleEn: 'Ceremony' },
+    { id: '3', timeEn: '11:00 PM', timeAr: '١١:٠٠ مساءً', titleEn: 'Dinner' },
+  ];
+  const earlierWedding = buildUpdatedWeddingTime({ date: '2026-11-24', dateTime: '2026-11-24T20:00:00+02:00' }, '19:30');
+  assert.equal(earlierWedding.timeEn, '7:30 PM');
+  assert.equal(earlierWedding.time, '٧:٣٠ مساءً');
+  assert.equal(earlierWedding.dateTime, '2026-11-24T19:30:00+02:00');
+  assert.equal(getEventStartTime24h(earlierWedding), '19:30');
+  const syncedEarlier = syncAgendaWithStartTime(customAgenda, earlierWedding);
+  assert.equal(syncedEarlier[0].timeEn, '7:30 PM');
+  assert.equal(syncedEarlier[1].timeEn, '9:30 PM', 'Valid subsequent item should be preserved');
+  assert.equal(syncedEarlier[2].timeEn, '11:00 PM', 'Valid subsequent item should be preserved');
+
+  // 5c. Moving start time past subsequent items adjusts sequence to stay valid
+  const laterWedding = buildUpdatedWeddingTime(earlierWedding, '22:00');
+  const syncedLater = syncAgendaWithStartTime(customAgenda, laterWedding);
+  assert.equal(syncedLater[0].timeEn, '10:00 PM');
+  assert.equal(syncedLater[1].timeEn, '11:30 PM', 'Conflicting subsequent item must shift forward');
+  assert.equal(syncedLater[2].timeEn, '1:00 AM', 'Third item must maintain valid sequencing past midnight');
+
+  // 5d. Adding, editing, and deleting agenda items keeps item #1 synced to event start time
+  const nextItem = createNextAgendaItem(syncedLater, laterWedding);
+  assert.equal(nextItem.timeEn, '2:00 AM', 'Added agenda item schedules 60m after last slot');
+  const editedAgenda = [
+    { ...syncedLater[0], titleEn: 'Doors Open', descriptionEn: 'Custom welcome note' },
+    ...syncedLater.slice(1),
+    nextItem,
+  ];
+  const afterDeleteFirst = syncAgendaWithStartTime(editedAgenda.slice(1), laterWedding);
+  assert.equal(afterDeleteFirst[0].timeEn, '10:00 PM', 'Deleting item #1 syncs new item #1 to event start time');
+
+  // 5e. Persistence check across saveActiveConfig / getActiveConfig
+  saveActiveConfig({ wedding: laterWedding, agenda: editedAgenda });
+  const reloaded = getActiveConfig();
+  assert.equal(reloaded.wedding.timeEn, '10:00 PM');
+  assert.equal(reloaded.agenda[0].timeEn, '10:00 PM');
+  assert.equal(reloaded.agenda[0].titleEn, 'Doors Open');
+  assert.equal(reloaded.agenda[0].descriptionEn, 'Custom welcome note');
+  assert.equal(reloaded.agenda.length, 4);
+  console.log('✅ [Agenda] Dynamic start time synchronization, item CRUD, sequencing, and persistence verified.');
+}
+
+// ─── 6. Event-Specific Dress Code Configuration Tests ─────────────────
+{
+  assert.ok(WEDDING_LADIES_BROWN_SHADES.length >= 5, 'Should provide descriptive solid brown shade options');
+  for (const shade of WEDDING_LADIES_BROWN_SHADES) {
+    assert.ok(shade.id && shade.hex && shade.nameEn && shade.nameAr, 'Each brown shade must have id, hex, nameEn, nameAr');
+  }
+
+  // Save Wedding dress code with 'espresso' brown shade & Engagement custom note
+  saveActiveConfig({
+    eventType: 'wedding',
+    dressCode: {
+      enabled: true,
+      byEventType: {
+        wedding: { ladiesBrownShade: 'espresso' },
+        engagement: { ladiesDescEn: 'Engagement pastel dresses only' },
+      },
+    },
+  });
+
+  const weddingCfg = getActiveConfig();
+  const weddingDisplay = resolveDressCodeForDisplay(weddingCfg, (k) => k, false);
+  assert.equal(weddingDisplay.isWedding, true);
+  assert.equal(weddingDisplay.ladiesSolidShade?.id, 'espresso');
+  assert.equal(weddingDisplay.ladiesSolidShade?.hex, '#3B2417');
+  assert.equal(weddingDisplay.womenColors.length, 1);
+  assert.equal(weddingDisplay.womenColors[0].nameEn, 'Espresso Brown');
+  assert.ok(weddingDisplay.ladiesDesc.includes('Espresso Brown'));
+
+  // Switch to Engagement and verify Wedding brown shade does NOT leak
+  const engagementCfg = mergeConfig({ ...weddingCfg, eventType: 'engagement' });
+  const engagementDisplay = resolveDressCodeForDisplay(engagementCfg, (k) => k, false);
+  assert.equal(engagementDisplay.isWedding, false);
+  assert.equal(engagementDisplay.ladiesSolidShade, null, 'Wedding brown shade must NOT apply to Engagement');
+  assert.equal(engagementDisplay.ladiesDesc, 'Engagement pastel dresses only');
+  assert.ok(engagementDisplay.womenColors.length > 1, 'Engagement keeps its own palette');
+
+  // Switch to Corporate and verify Wedding brown shade does NOT leak
+  const corpCfg = mergeConfig({ ...weddingCfg, eventType: 'corporate' });
+  const corpDisplay = resolveDressCodeForDisplay(corpCfg, (k) => k, false);
+  assert.equal(corpDisplay.ladiesSolidShade, null, 'Wedding brown shade must NOT apply to Corporate');
+  assert.ok(!corpDisplay.ladiesDesc.includes('Espresso Brown'));
+
+  // Change Wedding shade to 'caramel' and confirm persistence & isolation
+  saveActiveConfig({
+    ...weddingCfg,
+    dressCode: {
+      ...weddingCfg.dressCode,
+      byEventType: {
+        ...weddingCfg.dressCode.byEventType,
+        wedding: { ladiesBrownShade: 'caramel' },
+      },
+    },
+  });
+  const reloadedWedding = getActiveConfig();
+  assert.equal(reloadedWedding.dressCode.byEventType.wedding.ladiesBrownShade, 'caramel');
+  assert.equal(reloadedWedding.dressCode.byEventType.engagement.ladiesDescEn, 'Engagement pastel dresses only');
+  assert.equal('ladiesBrownShade' in reloadedWedding.dressCode.byEventType.engagement, false);
+  resetActiveConfig();
+  console.log('✅ [DressCode] Event-specific dress code isolation and Wedding brown shade dropdown verified.');
+}
+
+// ─── 7. GitHub Pages Deployment & Automatic Firestore Config Sync ─────
+{
+  // 7a. When deployed weddingConfig.js changes (hash mismatch), reload sync updates Firestore
+  let savedToFirestore = null;
+  const staleCloudConfig = {
+    eventType: 'wedding',
+    wedding: { timeEn: '5:00 PM', time: '٥:٠٠ مساءً' },
+    _staticConfigHash: 'old_hash_from_previous_push',
+  };
+  await syncConfigWithFirestore(
+    async () => staleCloudConfig,
+    async (cfg) => {
+      savedToFirestore = cfg;
+    },
+    { forceFirebaseEnabled: true }
+  );
+  assert.ok(savedToFirestore, 'Updated weddingConfig.js must be pushed to Firestore on reload');
+  assert.equal(savedToFirestore._staticConfigHash, getStaticConfigHash());
+  assert.equal(savedToFirestore.wedding.timeEn, baseWeddingConfig.wedding.timeEn);
+
+  // 7b. When deployed weddingConfig.js has NOT changed (hash matches), Firestore Admin edits win
+  let overwrittenOnMatch = false;
+  const liveAdminCloudConfig = {
+    eventType: 'wedding',
+    wedding: { timeEn: '9:30 PM', time: '٩:٣٠ مساءً' },
+    dressCode: { byEventType: { wedding: { ladiesBrownShade: 'chocolate' } } },
+    _staticConfigHash: getStaticConfigHash(),
+  };
+  const syncedLive = await syncConfigWithFirestore(
+    async () => liveAdminCloudConfig,
+    async () => {
+      overwrittenOnMatch = true;
+    },
+    { forceFirebaseEnabled: true }
+  );
+  assert.equal(overwrittenOnMatch, false, 'Unchanged weddingConfig.js must NOT overwrite live Firestore Admin edits');
+  assert.equal(syncedLive.wedding.timeEn, '9:30 PM');
+  assert.equal(syncedLive.dressCode.byEventType.wedding.ladiesBrownShade, 'chocolate');
+  resetActiveConfig();
+
+  // 7c. Firestore REST encoding helper converts nested objects/arrays cleanly
+  const encoded = toFirestoreFields({
+    eventType: 'wedding',
+    dressCode: { enabled: true, byEventType: { wedding: { ladiesBrownShade: 'mocha' } } },
+    sectionOrder: ['hero', 'details'],
+  });
+  assert.equal(encoded.eventType.stringValue, 'wedding');
+  assert.equal(
+    encoded.dressCode.mapValue.fields.byEventType.mapValue.fields.wedding.mapValue.fields.ladiesBrownShade.stringValue,
+    'mocha'
+  );
+  assert.equal(encoded.sectionOrder.arrayValue.values.length, 2);
+
+  // 7d. firebase.json & single GitHub Pages workflow verification
+  const firebaseJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'firebase.json'), 'utf8'));
+  assert.equal(firebaseJson.firestore?.rules, 'firestore.rules', 'firebase.json must reference firestore.rules');
+
+  const workflowDir = path.join(projectRoot, '.github', 'workflows');
+  const workflows = fs.readdirSync(workflowDir).filter((f) => f.endsWith('.yml') || f.endsWith('.yaml'));
+  assert.equal(workflows.length, 1, 'Must have exactly one deployment workflow (no duplicates)');
+
+  const workflowYml = fs.readFileSync(path.join(workflowDir, workflows[0]), 'utf8');
+  assert.ok(workflowYml.includes('branches: [main]'), 'Workflow must trigger on push to main');
+  assert.ok(workflowYml.includes('peaceiris/actions-gh-pages'), 'Workflow must deploy to GitHub Pages (github.io)');
+  assert.ok(workflowYml.includes('sync-wedding-config-to-firestore.mjs'), 'Workflow must sync updated weddingConfig.js to Firestore');
+  assert.ok(workflowYml.includes('secrets.FIREBASE_SERVICE_ACCOUNT'), 'Privileged Firebase creds must stay in GitHub Secrets');
+  console.log('✅ [Deploy & Sync] GitHub Pages workflow and automatic Firestore weddingConfig sync verified.');
+}
 
 // ─── 5. Phase 5 Role Separation Tests (DASH-TEST-02 & OWNER-TEST-03) ─
 const customerDashSource = fs.readFileSync(

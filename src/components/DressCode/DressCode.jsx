@@ -6,6 +6,7 @@ import OrnamentDivider from '../ui/OrnamentDivider';
 import { ThemeHeaderCrest } from '../ui/ThemeVisuals';
 import weddingConfig from '../../config/weddingConfig';
 import useWeddingConfig from '../../hooks/useWeddingConfig';
+import { resolveDressCodeForDisplay } from '../../config/dressCodeConfig';
 import './DressCode.css';
 
 const SuitIcon = () => (
@@ -27,23 +28,6 @@ const DressIcon = () => (
   </svg>
 );
 
-const MEN_COLORS = [
-  { hex: '#1C1C1E', nameAr: 'أسود', nameEn: 'Black' },
-  { hex: '#1B2A4A', nameAr: 'كحلي', nameEn: 'Navy Blue' },
-  { hex: '#3A3D40', nameAr: 'رمادي داكن', nameEn: 'Charcoal' },
-  { hex: '#A88B68', nameAr: 'لاتيه', nameEn: 'Latte / Taupe' },
-  { hex: '#D6C5B3', nameAr: 'بيج دافئ', nameEn: 'Warm Beige' },
-];
-
-const WOMEN_COLORS = [
-  { hex: '#F2C4CE', nameAr: 'وردي باستيل', nameEn: 'Blush Pink' },
-  { hex: '#D4A5A5', nameAr: 'روز هادئ', nameEn: 'Dusty Rose' },
-  { hex: '#C8D5C0', nameAr: 'ميرمية', nameEn: 'Soft Sage' },
-  { hex: '#DCD0E6', nameAr: 'لافندر', nameEn: 'Lavender' },
-  { hex: '#B8C9E0', nameAr: 'بيبي بلو', nameEn: 'Baby Blue' },
-  { hex: '#F5E2CE', nameAr: 'شامبين', nameEn: 'Champagne' },
-];
-
 const DressCode = () => {
   const { t, i18n } = useTranslation();
   const isAr = i18n.language === 'ar';
@@ -54,43 +38,20 @@ const DressCode = () => {
 
   if (!isDressCodeEnabled) return null;
 
-  const dc = liveConfig.dressCode || {};
-  const secCfg = liveConfig.sections?.dressCode || {};
-
-  const sectionTitle = isAr
-    ? (secCfg.titleAr || dc.titleAr || t('dressCode.title'))
-    : (secCfg.titleEn || dc.titleEn || t('dressCode.title'));
-
-  const sectionSubtitle = isAr
-    ? (secCfg.subtitleAr || dc.subtitleAr || t('dressCode.subtitle'))
-    : (secCfg.subtitleEn || dc.subtitleEn || t('dressCode.subtitle'));
-
-  const gentlemenTitle = isAr
-    ? (dc.gentlemenTitleAr || t('dressCode.gentlemenTitle'))
-    : (dc.gentlemenTitleEn || t('dressCode.gentlemenTitle'));
-
-  const gentlemenDesc = isAr
-    ? (dc.gentlemenDescAr || t('dressCode.gentlemenDesc'))
-    : (dc.gentlemenDescEn || t('dressCode.gentlemenDesc'));
-
-  const ladiesTitle = isAr
-    ? (dc.ladiesTitleAr || t('dressCode.ladiesTitle'))
-    : (dc.ladiesTitleEn || t('dressCode.ladiesTitle'));
-
-  const ladiesDesc = isAr
-    ? (dc.ladiesDescAr || t('dressCode.ladiesDesc'))
-    : (dc.ladiesDescEn || t('dressCode.ladiesDesc'));
-
-  const noteTitle = isAr
-    ? (dc.noteTitleAr || t('dressCode.noteTitle'))
-    : (dc.noteTitleEn || t('dressCode.noteTitle'));
-
-  const noteDesc = isAr
-    ? (dc.noteDescAr || t('dressCode.noteDesc'))
-    : (dc.noteDescEn || t('dressCode.noteDesc'));
-
-  const menColors = Array.isArray(dc.menColors) && dc.menColors.length > 0 ? dc.menColors : MEN_COLORS;
-  const womenColors = Array.isArray(dc.womenColors) && dc.womenColors.length > 0 ? dc.womenColors : WOMEN_COLORS;
+  const {
+    sectionTitle,
+    sectionSubtitle,
+    gentlemenTitle,
+    gentlemenDesc,
+    ladiesTitle,
+    ladiesDesc,
+    noteTitle,
+    noteDesc,
+    menColors,
+    womenColors,
+    ladiesSolidShade,
+    paletteLabelLadies,
+  } = resolveDressCodeForDisplay(liveConfig, t, isAr);
 
   return (
     <SectionWrapper id="dress-code" alt>
@@ -161,19 +122,37 @@ const DressCode = () => {
 
             <div className="palette-wrap">
               <span className="palette-label font-serif">
-                {isAr ? 'درجات الألوان الموصى بها:' : 'Suggested Tone Palette:'}
+                {paletteLabelLadies}
               </span>
-              <div className="palette-swatches">
-                {womenColors.map((c, i) => (
-                  <div key={i} className="swatch-item" title={isAr ? c.nameAr : c.nameEn}>
-                    <span
-                      className="swatch-circle"
-                      style={{ backgroundColor: c.hex }}
-                    />
-                    <span className="swatch-name">{isAr ? c.nameAr : c.nameEn}</span>
+              {ladiesSolidShade ? (
+                <div className="palette-featured-shade" data-shade-id={ladiesSolidShade.id}>
+                  <span
+                    className="swatch-circle swatch-circle--featured"
+                    style={{ backgroundColor: ladiesSolidShade.hex }}
+                    aria-label={isAr ? ladiesSolidShade.nameAr : ladiesSolidShade.nameEn}
+                  />
+                  <div className="palette-featured-shade__meta">
+                    <span className="palette-featured-shade__name font-serif">
+                      {isAr ? ladiesSolidShade.nameAr : ladiesSolidShade.nameEn}
+                    </span>
+                    <span className="palette-featured-shade__tag">
+                      {isAr ? 'لون سادة موحّد' : 'Solid Brown Shade'} · {ladiesSolidShade.hex}
+                    </span>
                   </div>
-                ))}
-              </div>
+                </div>
+              ) : (
+                <div className="palette-swatches">
+                  {womenColors.map((c, i) => (
+                    <div key={i} className="swatch-item" title={isAr ? c.nameAr : c.nameEn}>
+                      <span
+                        className="swatch-circle"
+                        style={{ backgroundColor: c.hex }}
+                      />
+                      <span className="swatch-name">{isAr ? c.nameAr : c.nameEn}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </motion.div>

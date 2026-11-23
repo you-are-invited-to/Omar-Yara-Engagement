@@ -6,7 +6,6 @@ import {
   Plus,
   Trash2,
   Download,
-  Upload,
   LogOut,
   ExternalLink,
   CheckCircle,
@@ -17,6 +16,7 @@ import {
   HeartHandshake,
   Music,
   Calendar,
+  Clock,
   Save,
   ShieldAlert,
   ShieldCheck,
@@ -38,10 +38,28 @@ import {
   saveActiveConfig,
   resetActiveConfig,
   downloadConfigFile,
+  getStaticConfigHash,
+  mergeConfig,
   clone,
 } from '../../utils/configManager';
 import { DEFAULT_THEME_ID, WEDDING_THEMES, getThemeById } from '../../config/themesConfig';
 import { EVENT_TYPES, DEFAULT_EVENT_TYPE_ID, getEventTypeById } from '../../config/eventTypesConfig';
+import {
+  WEDDING_LADIES_BROWN_SHADES,
+  getWeddingBrownShadeById,
+  getDefaultDressCodeForEventType,
+  normalizeDressCodeByEventType,
+} from '../../config/dressCodeConfig';
+import {
+  getEventStartTime24h,
+  buildUpdatedWeddingTime,
+  syncAgendaWithStartTime,
+  parseTimeToMinutes,
+  formatMinutesToTimeEn,
+  formatMinutesToTimeAr,
+  formatMinutesTo24h,
+  createNextAgendaItem,
+} from '../../utils/agendaUtils';
 import ThemeManager from '../Admin/ThemeManager';
 import DynamicSectionsEditor from '../Admin/DynamicSectionsEditor';
 import '../Admin/AdminPortal.css';
@@ -119,7 +137,44 @@ const OwnerAdmin = ({ onClose }) => {
   // Active Event Config being prepared
   const [configData, setConfigData] = useState(() => getActiveConfig());
   const [activeThemeId, setActiveThemeId] = useState(() => getActiveConfig().theme || DEFAULT_THEME_ID);
+  const [dressCodeEventType, setDressCodeEventType] = useState(
+    () => getActiveConfig().eventType || DEFAULT_EVENT_TYPE_ID
+  );
   const [savingConfig, setSavingConfig] = useState(false);
+
+  // Load latest live configuration from Firestore when Owner Admin authenticates
+  // (or push newly deployed weddingConfig.js to Firestore if its hash changed)
+  useEffect(() => {
+    if (!OWNER_ADMIN_ENABLED || !ownerUser || !FIREBASE_ENABLED) return;
+    let cancelled = false;
+    const currentHash = getStaticConfigHash();
+    getWeddingConfigFromDB()
+      .then(async (cloudConfig) => {
+        if (cancelled) return;
+        const hasCloud =
+          cloudConfig && typeof cloudConfig === 'object' && Object.keys(cloudConfig).length > 0;
+        if (hasCloud && cloudConfig._staticConfigHash === currentHash) {
+          const merged = { ...mergeConfig(cloudConfig), _staticConfigHash: currentHash };
+          saveActiveConfig(merged);
+          setConfigData(merged);
+          setActiveThemeId(merged.theme || DEFAULT_THEME_ID);
+          setDressCodeEventType(merged.eventType || DEFAULT_EVENT_TYPE_ID);
+        } else {
+          const fresh = { ...mergeConfig(null), _staticConfigHash: currentHash };
+          saveActiveConfig(fresh);
+          setConfigData(fresh);
+          setActiveThemeId(fresh.theme || DEFAULT_THEME_ID);
+          setDressCodeEventType(fresh.eventType || DEFAULT_EVENT_TYPE_ID);
+          await saveWeddingConfigToDB(fresh);
+        }
+      })
+      .catch((err) => {
+        console.warn('[OwnerAdmin] Could not sync initial Firestore config:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ownerUser]);
 
   const showToast = (msg, type = 'success') => {
     setToastMessage({ text: msg, type });
@@ -329,11 +384,129 @@ const OwnerAdmin = ({ onClose }) => {
       if (section) {
         if (!next[section]) next[section] = {};
         next[section][field] = value;
+
+        // Keep wedding date synced with ISO dateTime
+        if (section === 'wedding' && field === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+          const time24 = getEventStartTime24h(next.wedding);
+          const tzPart = next.wedding.dateTime?.match(/([+-]\d{2}:\d{2}|Z)$/)?.[1] || '+02:00';
+          next.wedding.dateTime = `${value}T${time24}:00${tzPart}`;
+        }
+
+        // Keep agenda synchronized when ISO dateTime or display time fields change directly
+        if (section === 'wedding' && (field === 'dateTime' || field === 'timeEn' || field === 'time')) {
+          if (field === 'dateTime') {
+            const updatedWedding = buildUpdatedWeddingTime(next.wedding, value);
+            next.wedding = { ...updatedWedding, dateTime: value };
+          } else if (field === 'timeEn') {
+            const updatedWedding = buildUpdatedWeddingTime(next.wedding, value);
+            next.wedding = { ...updatedWedding, timeEn: value };
+          }
+          if (Array.isArray(next.agenda) && next.agenda.length > 0) {
+            next.agenda = syncAgendaWithStartTime(next.agenda, next.wedding);
+          }
+        }
+
+        // Keep dressCode.enabled synced with sections.dressCode.enabled
+        if (section === 'dressCode' && field === 'enabled') {
+          if (!next.sections) next.sections = {};
+          next.sections.dressCode = { ...(next.sections.dressCode || {}), enabled: Boolean(value) };
+        }
       } else {
         next[field] = value;
       }
       return next;
     });
+    if (!section && field === 'eventType' && value) {
+      setDressCodeEventType(value);
+    }
+  };
+
+  const handleEventStartTimeChange = (rawTimeValue) => {
+    setConfigData((prev) => {
+      const next = clone(prev) || {};
+      next.wedding = buildUpdatedWeddingTime(next.wedding || {}, rawTimeValue);
+      if (Array.isArray(next.agenda) && next.agenda.length > 0) {
+        next.agenda = syncAgendaWithStartTime(next.agenda, next.wedding);
+      }
+      return next;
+    });
+  };
+
+  const handleEventDressCodeChange = (eventTypeId, field, value) => {
+    setConfigData((prev) => {
+      const next = clone(prev) || {};
+      if (!next.dressCode) next.dressCode = { enabled: true };
+      const byEvent = normalizeDressCodeByEventType(next.dressCode.byEventType);
+      byEvent[eventTypeId] = {
+        ...(byEvent[eventTypeId] || {}),
+        [field]: value,
+      };
+      next.dressCode.byEventType = byEvent;
+      return next;
+    });
+  };
+
+  // ─── Agenda Items CRUD (Item #1 always synced with Event Start Time) ───
+  const handleAddAgendaItem = () => {
+    setConfigData((prev) => {
+      const next = clone(prev) || {};
+      const baseList = syncAgendaWithStartTime(next.agenda, next.wedding, {
+        useGoldenDefaults: true,
+      });
+      const newItem = createNextAgendaItem(baseList, next.wedding);
+      next.agenda = syncAgendaWithStartTime([...baseList, newItem], next.wedding);
+      return next;
+    });
+    showToast('تمت إضافة فقرة جديدة للأجندة! تذكر الضغط على "حفظ وتطبيق الإعدادات".');
+  };
+
+  const handleUpdateAgendaItem = (index, field, value) => {
+    setConfigData((prev) => {
+      const next = clone(prev) || {};
+      const baseList = syncAgendaWithStartTime(next.agenda, next.wedding, {
+        useGoldenDefaults: true,
+      });
+      if (!baseList[index]) return prev;
+
+      const updatedItem = { ...baseList[index] };
+      if (field === 'time24') {
+        const mins = parseTimeToMinutes(value);
+        if (mins !== null) {
+          updatedItem.timeEn = formatMinutesToTimeEn(mins);
+          updatedItem.timeAr = formatMinutesToTimeAr(mins);
+        }
+      } else {
+        updatedItem[field] = value;
+      }
+
+      const nextList = baseList.map((item, idx) => (idx === index ? updatedItem : item));
+      next.agenda =
+        field === 'time24' ? syncAgendaWithStartTime(nextList, next.wedding) : nextList;
+      return next;
+    });
+  };
+
+  const handleDeleteAgendaItem = (index) => {
+    setConfigData((prev) => {
+      const next = clone(prev) || {};
+      const baseList = syncAgendaWithStartTime(next.agenda, next.wedding, {
+        useGoldenDefaults: true,
+      });
+      if (baseList.length <= 1) return prev;
+      const remaining = baseList.filter((_, idx) => idx !== index);
+      next.agenda = syncAgendaWithStartTime(remaining, next.wedding);
+      return next;
+    });
+    showToast('تم حذف الفقرة من الأجندة');
+  };
+
+  const handleResetAgendaItems = () => {
+    setConfigData((prev) => {
+      const next = clone(prev) || {};
+      next.agenda = [];
+      return next;
+    });
+    showToast('تمت استعادة فقرات الأجندة الافتراضية المربوطة بوقت بدء الحفل');
   };
 
   const handleAddWishlistItem = () => {
@@ -386,15 +559,24 @@ const OwnerAdmin = ({ onClose }) => {
   const handleSaveConfig = async () => {
     setSavingConfig(true);
     try {
-      saveActiveConfig(configData);
-      setActiveThemeId(configData.theme || DEFAULT_THEME_ID);
+      const normalized = {
+        ...mergeConfig(configData),
+        _staticConfigHash: getStaticConfigHash(),
+      };
+      setConfigData(normalized);
+      saveActiveConfig(normalized);
+      setActiveThemeId(normalized.theme || DEFAULT_THEME_ID);
       if (FIREBASE_ENABLED) {
-        await saveWeddingConfigToDB(configData);
+        await saveWeddingConfigToDB(normalized);
       }
-      showToast('تم حفظ الإعدادات وتطبيقها بنجاح!');
+      showToast(
+        FIREBASE_ENABLED
+          ? 'تم حفظ الإعدادات ومزامنتها مباشرة مع Firebase بنجاح!'
+          : 'تم حفظ الإعدادات وتطبيقها بنجاح!'
+      );
     } catch (err) {
       console.error(err);
-      showToast('حدث خطأ أثناء حفظ الإعدادات', 'error');
+      showToast('حدث خطأ أثناء حفظ الإعدادات في Firebase. تأكد من صلاحيات الدخول.', 'error');
     } finally {
       setSavingConfig(false);
     }
@@ -403,7 +585,10 @@ const OwnerAdmin = ({ onClose }) => {
   const handleApplyAndSaveTheme = async (themeId) => {
     setSavingConfig(true);
     try {
-      const nextConfig = { ...clone(configData), theme: themeId };
+      const nextConfig = {
+        ...mergeConfig({ ...clone(configData), theme: themeId }),
+        _staticConfigHash: getStaticConfigHash(),
+      };
       setConfigData(nextConfig);
       saveActiveConfig(nextConfig);
       setActiveThemeId(themeId);
@@ -1113,10 +1298,84 @@ VITE_FIREBASE_APP_ID=${cust.firebaseAppId || ''}
                     />
                   </div>
                   <div className="admin-form-group">
+                    <label className="admin-label">
+                      <Clock size={14} style={{ marginInlineEnd: '0.35rem', verticalAlign: 'middle' }} />
+                      وقت بدء الحفل (Event Start Time)
+                    </label>
+                    <input
+                      id="wedding-start-time-input"
+                      type="time"
+                      className="admin-input"
+                      style={{ direction: 'ltr', textAlign: 'left' }}
+                      value={getEventStartTime24h(configData.wedding)}
+                      onChange={(e) => handleEventStartTimeChange(e.target.value)}
+                    />
+                  </div>
+                  <div className="admin-form-group">
+                    <label className="admin-label">عرض الوقت (English — يضبط أول فقرة بالأجندة)</label>
+                    <input
+                      id="wedding-time-en-input"
+                      type="text"
+                      className="admin-input"
+                      style={{ direction: 'ltr', textAlign: 'left' }}
+                      placeholder="8:00 PM"
+                      value={configData.wedding?.timeEn || ''}
+                      onChange={(e) => handleConfigChange('wedding', 'timeEn', e.target.value)}
+                    />
+                  </div>
+                  <div className="admin-form-group">
+                    <label className="admin-label">عرض الوقت (بالعربي)</label>
+                    <input
+                      id="wedding-time-ar-input"
+                      type="text"
+                      className="admin-input"
+                      placeholder="٨:٠٠ مساءً"
+                      value={configData.wedding?.time || ''}
+                      onChange={(e) => handleConfigChange('wedding', 'time', e.target.value)}
+                    />
+                  </div>
+                  <div className="admin-form-group" style={{ gridColumn: '1 / -1' }}>
+                    {(() => {
+                      const previewAgenda = syncAgendaWithStartTime(
+                        configData.agenda,
+                        configData.wedding,
+                        { useGoldenDefaults: true }
+                      );
+                      const firstItem = previewAgenda[0];
+                      return (
+                        <div
+                          style={{
+                            background: 'rgba(212, 175, 55, 0.08)',
+                            border: '1px solid rgba(212, 175, 55, 0.3)',
+                            borderRadius: '10px',
+                            padding: '0.75rem 1rem',
+                            fontSize: '0.84rem',
+                            color: '#e5dec9',
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            justifyContent: 'space-between',
+                            gap: '0.5rem',
+                          }}
+                        >
+                          <span>
+                            🕒 أول فقرة في الأجندة تتطابق تلقائياً مع وقت بدء الحفل:{' '}
+                            <strong style={{ color: '#d4af37' }}>
+                              {firstItem?.timeEn} ({firstItem?.timeAr})
+                            </strong>
+                          </span>
+                          <span style={{ color: '#a89f91' }}>
+                            {firstItem?.titleEn}
+                          </span>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  <div className="admin-form-group">
                     <label className="admin-label">تاريخ ISO للعد التنازلي</label>
                     <input
                       type="text"
                       className="admin-input"
+                      style={{ direction: 'ltr', textAlign: 'left' }}
                       value={configData.wedding?.dateTime || ''}
                       onChange={(e) => handleConfigChange('wedding', 'dateTime', e.target.value)}
                     />
@@ -1167,6 +1426,582 @@ VITE_FIREBASE_APP_ID=${cust.firebaseAppId || ''}
                     />
                   </div>
                 </div>
+              </div>
+
+              {/* Event Agenda Items Editor */}
+              <div className="admin-card" style={{ gridColumn: '1 / -1' }}>
+                {(() => {
+                  const editableAgenda = syncAgendaWithStartTime(
+                    configData.agenda,
+                    configData.wedding,
+                    { useGoldenDefaults: true }
+                  );
+                  return (
+                    <>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          flexWrap: 'wrap',
+                          gap: '0.75rem',
+                          marginBottom: '1rem',
+                        }}
+                      >
+                        <div>
+                          <h3 className="admin-card-title" style={{ marginBottom: '0.25rem' }}>
+                            <Clock size={20} />
+                            برنامج وفقرات الاحتفال (Event Agenda — The Order of Events)
+                          </h3>
+                          <p style={{ fontSize: '0.84rem', color: '#a89f91', margin: 0 }}>
+                            عدّل عناوين ووصف كل فقرة أو أضف/احذف فقرات. وقت الفقرة الأولى (#1) يتطابق تلقائياً مع وقت بدء الحفل أعلاه.
+                          </p>
+                        </div>
+
+                        <div className="admin-btn-group">
+                          <button
+                            id="btn-add-agenda-item"
+                            type="button"
+                            onClick={handleAddAgendaItem}
+                            className="admin-btn admin-btn--primary admin-btn--sm"
+                          >
+                            <Plus size={16} />
+                            <span>إضافة فقرة جديدة</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleResetAgendaItems}
+                            className="admin-btn admin-btn--outline admin-btn--sm"
+                          >
+                            <span>استعادة الافتراضي</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                        {editableAgenda.map((slot, idx) => {
+                          const isFirst = idx === 0;
+                          const slotMins = parseTimeToMinutes(slot.timeEn || slot.timeAr);
+                          const slotTime24 =
+                            slotMins !== null
+                              ? formatMinutesTo24h(slotMins)
+                              : getEventStartTime24h(configData.wedding);
+
+                          return (
+                            <div
+                              key={slot.id || idx}
+                              style={{
+                                background: 'rgba(255, 255, 255, 0.03)',
+                                border: isFirst
+                                  ? '1px solid rgba(212, 175, 55, 0.45)'
+                                  : '1px solid rgba(255, 255, 255, 0.1)',
+                                borderRadius: '10px',
+                                padding: '0.95rem 1rem',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  flexWrap: 'wrap',
+                                  gap: '0.5rem',
+                                  marginBottom: '0.75rem',
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                                  <span className="admin-badge admin-badge--gold">#{idx + 1}</span>
+                                  <strong style={{ color: '#d4af37', fontSize: '0.9rem' }}>
+                                    {slot.timeEn} ({slot.timeAr})
+                                  </strong>
+                                  {isFirst && (
+                                    <span className="admin-badge admin-badge--success">
+                                      مربوط تلقائياً بوقت بدء الحفل (Event Start Time)
+                                    </span>
+                                  )}
+                                </div>
+
+                                <button
+                                  type="button"
+                                  disabled={editableAgenda.length <= 1}
+                                  onClick={() => handleDeleteAgendaItem(idx)}
+                                  className="admin-btn admin-btn--danger-sm"
+                                  style={{ opacity: editableAgenda.length <= 1 ? 0.4 : 1 }}
+                                  title="حذف هذه الفقرة"
+                                >
+                                  <Trash2 size={14} />
+                                  <span>حذف</span>
+                                </button>
+                              </div>
+
+                              <div className="admin-form-grid-2">
+                                {!isFirst && (
+                                  <div className="admin-form-group" style={{ gridColumn: '1 / -1' }}>
+                                    <label className="admin-label">
+                                      وقت الفقرة #{idx + 1} (Time — يتبع الترتيب الزمني تلقائياً)
+                                    </label>
+                                    <input
+                                      type="time"
+                                      className="admin-input"
+                                      style={{ maxWidth: '220px', direction: 'ltr', textAlign: 'left' }}
+                                      value={slotTime24}
+                                      onChange={(e) =>
+                                        handleUpdateAgendaItem(idx, 'time24', e.target.value)
+                                      }
+                                    />
+                                  </div>
+                                )}
+
+                                <div className="admin-form-group">
+                                  <label className="admin-label">عنوان الفقرة (بالعربي)</label>
+                                  <input
+                                    type="text"
+                                    className="admin-input"
+                                    value={slot.titleAr || ''}
+                                    onChange={(e) =>
+                                      handleUpdateAgendaItem(idx, 'titleAr', e.target.value)
+                                    }
+                                    placeholder="مثال: استقبال الضيوف والترحيب"
+                                  />
+                                </div>
+
+                                <div className="admin-form-group">
+                                  <label className="admin-label">Agenda Title (English)</label>
+                                  <input
+                                    type="text"
+                                    className="admin-input"
+                                    style={{ direction: 'ltr', textAlign: 'left' }}
+                                    value={slot.titleEn || ''}
+                                    onChange={(e) =>
+                                      handleUpdateAgendaItem(idx, 'titleEn', e.target.value)
+                                    }
+                                    placeholder="e.g. Guest Arrival & Welcome Drinks"
+                                  />
+                                </div>
+
+                                <div className="admin-form-group">
+                                  <label className="admin-label">وصف الفقرة (بالعربي)</label>
+                                  <input
+                                    type="text"
+                                    className="admin-input"
+                                    value={slot.descriptionAr || ''}
+                                    onChange={(e) =>
+                                      handleUpdateAgendaItem(idx, 'descriptionAr', e.target.value)
+                                    }
+                                    placeholder="وصف مختصر للفقرة..."
+                                  />
+                                </div>
+
+                                <div className="admin-form-group">
+                                  <label className="admin-label">Description (English)</label>
+                                  <input
+                                    type="text"
+                                    className="admin-input"
+                                    style={{ direction: 'ltr', textAlign: 'left' }}
+                                    value={slot.descriptionEn || ''}
+                                    onChange={(e) =>
+                                      handleUpdateAgendaItem(idx, 'descriptionEn', e.target.value)
+                                    }
+                                    placeholder="Short description for guests..."
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+
+              {/* Event-Specific Dress Code Configuration */}
+              <div className="admin-card" style={{ gridColumn: '1 / -1' }}>
+                {(() => {
+                  const normalizedByEvent = normalizeDressCodeByEventType(
+                    configData.dressCode?.byEventType
+                  );
+                  const currentEventDc = normalizedByEvent[dressCodeEventType] || {};
+                  const currentEventDefaults = getDefaultDressCodeForEventType(dressCodeEventType);
+                  const isEditingWedding = dressCodeEventType === 'wedding';
+                  const isActiveEventType =
+                    dressCodeEventType === (configData.eventType || DEFAULT_EVENT_TYPE_ID);
+                  const selectedBrownShade = isEditingWedding
+                    ? getWeddingBrownShadeById(currentEventDc.ladiesBrownShade)
+                    : null;
+                  const selectedEtMeta = getEventTypeById(dressCodeEventType);
+
+                  return (
+                    <>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          flexWrap: 'wrap',
+                          gap: '0.75rem',
+                          marginBottom: '1rem',
+                        }}
+                      >
+                        <h3 className="admin-card-title" style={{ margin: 0 }}>
+                          <Palette size={20} />
+                          إعدادات دليل الأناقة حسب نوع المناسبة (Event-Specific Dress Code)
+                        </h3>
+
+                        <label className="admin-toggle-label" style={{ margin: 0, fontWeight: 600 }}>
+                          <input
+                            type="checkbox"
+                            checked={configData.dressCode?.enabled !== false}
+                            onChange={(e) =>
+                              handleConfigChange('dressCode', 'enabled', e.target.checked)
+                            }
+                          />
+                          <span>تفعيل قسم الدريس كود</span>
+                        </label>
+                      </div>
+
+                      <div className="admin-form-grid-2" style={{ marginBottom: '1rem' }}>
+                        <div className="admin-form-group" style={{ gridColumn: '1 / -1' }}>
+                          <label className="admin-label">
+                            تخصيص دليل الأناقة لنوع المناسبة (مستقل لكل نوع مناسبة):
+                          </label>
+                          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <select
+                              id="dresscode-event-type-select"
+                              className="admin-input admin-select"
+                              style={{ flex: '1 1 260px' }}
+                              value={dressCodeEventType}
+                              onChange={(e) => setDressCodeEventType(e.target.value)}
+                            >
+                              {EVENT_TYPES.map((et) => (
+                                <option key={et.id} value={et.id}>
+                                  {et.nameAr}
+                                  {et.id === (configData.eventType || DEFAULT_EVENT_TYPE_ID)
+                                    ? ' — (النوع النشط حالياً / Active)'
+                                    : ''}
+                                </option>
+                              ))}
+                            </select>
+                            <span
+                              className={`admin-badge ${isActiveEventType ? 'admin-badge--success' : 'admin-badge--warning'
+                                }`}
+                            >
+                              {isActiveEventType
+                                ? 'يُعرض حالياً على الدعوة العامة'
+                                : `إعداد مستقل لـ ${selectedEtMeta.nameEn}`}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Wedding-Only Ladies Solid Brown Shade Selector */}
+                      {isEditingWedding ? (
+                        <div
+                          style={{
+                            background: 'rgba(212, 175, 55, 0.08)',
+                            border: '1px solid rgba(212, 175, 55, 0.35)',
+                            borderRadius: '12px',
+                            padding: '1.15rem',
+                            marginBottom: '1.15rem',
+                          }}
+                        >
+                          <div className="admin-form-grid-2" style={{ alignItems: 'center' }}>
+                            <div className="admin-form-group">
+                              <label
+                                htmlFor="wedding-ladies-brown-shade-select"
+                                className="admin-label"
+                                style={{ color: '#d4af37', fontWeight: 700 }}
+                              >
+                                درجة اللون البني السادة المسموح بها للسيدات — خاص بحفل الزفاف (Wedding Only)
+                              </label>
+                              <select
+                                id="wedding-ladies-brown-shade-select"
+                                className="admin-input admin-select"
+                                value={selectedBrownShade.id}
+                                onChange={(e) =>
+                                  handleEventDressCodeChange(
+                                    'wedding',
+                                    'ladiesBrownShade',
+                                    e.target.value
+                                  )
+                                }
+                              >
+                                {WEDDING_LADIES_BROWN_SHADES.map((shade) => (
+                                  <option key={shade.id} value={shade.id}>
+                                    {shade.nameEn} — {shade.nameAr} ({shade.hex})
+                                  </option>
+                                ))}
+                              </select>
+                              <small style={{ color: '#a89f91', marginTop: '0.35rem', display: 'block' }}>
+                                هذا الاختيار مخصص لنوع مناسبة الزفاف (Wedding) فقط ولا يؤثر على الخطوبة أو أي مناسبة أخرى.
+                              </small>
+                            </div>
+
+                            {/* Visual Color Preview */}
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '1rem',
+                                background: 'rgba(18, 16, 14, 0.65)',
+                                border: '1px solid rgba(212, 175, 55, 0.3)',
+                                borderRadius: '10px',
+                                padding: '0.85rem 1rem',
+                              }}
+                            >
+                              <span
+                                aria-label={selectedBrownShade.nameEn}
+                                style={{
+                                  width: '48px',
+                                  height: '48px',
+                                  borderRadius: '50%',
+                                  backgroundColor: selectedBrownShade.hex,
+                                  border: '2px solid #FAF8F3',
+                                  boxShadow: '0 0 0 2px rgba(212, 175, 55, 0.6)',
+                                  flexShrink: 0,
+                                }}
+                              />
+                              <div>
+                                <div style={{ color: '#f8f4ef', fontWeight: 700, fontSize: '0.96rem' }}>
+                                  {selectedBrownShade.nameEn} · {selectedBrownShade.nameAr}
+                                </div>
+                                <div style={{ color: '#c4b5a0', fontSize: '0.82rem', marginTop: '2px' }}>
+                                  {selectedBrownShade.descriptionEn} ({selectedBrownShade.hex})
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Visual Quick-Select Brown Shade Swatches */}
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexWrap: 'wrap',
+                              gap: '0.55rem',
+                              marginTop: '0.9rem',
+                              paddingTop: '0.75rem',
+                              borderTop: '1px solid rgba(255,255,255,0.08)',
+                            }}
+                          >
+                            {WEDDING_LADIES_BROWN_SHADES.map((shade) => {
+                              const active = shade.id === selectedBrownShade.id;
+                              return (
+                                <button
+                                  key={shade.id}
+                                  type="button"
+                                  onClick={() =>
+                                    handleEventDressCodeChange(
+                                      'wedding',
+                                      'ladiesBrownShade',
+                                      shade.id
+                                    )
+                                  }
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.45rem',
+                                    padding: '0.35rem 0.7rem',
+                                    borderRadius: '999px',
+                                    background: active
+                                      ? 'rgba(212, 175, 55, 0.22)'
+                                      : 'rgba(255, 255, 255, 0.04)',
+                                    border: active
+                                      ? '1px solid #d4af37'
+                                      : '1px solid rgba(255, 255, 255, 0.12)',
+                                    color: active ? '#f8f4ef' : '#c4b5a0',
+                                    fontSize: '0.78rem',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      width: '14px',
+                                      height: '14px',
+                                      borderRadius: '50%',
+                                      backgroundColor: shade.hex,
+                                      border: '1px solid rgba(255,255,255,0.5)',
+                                    }}
+                                  />
+                                  <span>{shade.nameEn}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          style={{
+                            background: 'rgba(255, 255, 255, 0.03)',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            borderRadius: '10px',
+                            padding: '0.85rem 1rem',
+                            marginBottom: '1rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            flexWrap: 'wrap',
+                            gap: '0.75rem',
+                          }}
+                        >
+                          <div style={{ fontSize: '0.84rem', color: '#c4b5a0', flex: '1 1 280px' }}>
+                            إعدادات الألوان الافتراضية لـ{' '}
+                            <strong style={{ color: '#f8f4ef' }}>{selectedEtMeta.nameEn}</strong>{' '}
+                            منفصلة تماماً عن خيار اللون البني الخاص بحفل الزفاف (Wedding).
+                            <div style={{ marginTop: '0.45rem' }}>
+                              <button
+                                type="button"
+                                onClick={() => setDressCodeEventType('wedding')}
+                                className="admin-btn admin-btn--outline admin-btn--sm"
+                                style={{ fontSize: '0.78rem', padding: '0.3rem 0.65rem' }}
+                              >
+                                <Palette size={14} />
+                                <span>عرض قائمة درجات البني لحفل الزفاف (Wedding Dropdown)</span>
+                              </button>
+                            </div>
+                          </div>
+                          {Array.isArray(currentEventDefaults.womenColors) && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              {currentEventDefaults.womenColors.map((c, idx) => (
+                                <span
+                                  key={idx}
+                                  title={`${c.nameEn} (${c.nameAr})`}
+                                  style={{
+                                    width: '20px',
+                                    height: '20px',
+                                    borderRadius: '50%',
+                                    backgroundColor: c.hex,
+                                    border: '1px solid rgba(255,255,255,0.4)',
+                                    display: 'inline-block',
+                                  }}
+                                />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Event-Type-Specific Extensible Text Overrides */}
+                      <div className="admin-form-grid-2">
+                        <div className="admin-form-group">
+                          <label className="admin-label">
+                            وصف إطلالة الرجال لـ {selectedEtMeta.nameEn} (بالعربي — اختياري)
+                          </label>
+                          <input
+                            type="text"
+                            className="admin-input"
+                            placeholder={currentEventDefaults.gentlemenDescAr || ''}
+                            value={currentEventDc.gentlemenDescAr || ''}
+                            onChange={(e) =>
+                              handleEventDressCodeChange(
+                                dressCodeEventType,
+                                'gentlemenDescAr',
+                                e.target.value
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="admin-form-group">
+                          <label className="admin-label">
+                            Gentlemen Attire for {selectedEtMeta.nameEn} (English — optional)
+                          </label>
+                          <input
+                            type="text"
+                            className="admin-input"
+                            placeholder={currentEventDefaults.gentlemenDescEn || ''}
+                            value={currentEventDc.gentlemenDescEn || ''}
+                            onChange={(e) =>
+                              handleEventDressCodeChange(
+                                dressCodeEventType,
+                                'gentlemenDescEn',
+                                e.target.value
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="admin-form-group">
+                          <label className="admin-label">
+                            وصف إطلالة السيدات لـ {selectedEtMeta.nameEn} (بالعربي — اختياري)
+                          </label>
+                          <input
+                            type="text"
+                            className="admin-input"
+                            placeholder={
+                              isEditingWedding
+                                ? `اتركه فارغاً للعرض التلقائي: ${selectedBrownShade.nameAr}`
+                                : currentEventDefaults.ladiesDescAr || ''
+                            }
+                            value={currentEventDc.ladiesDescAr || ''}
+                            onChange={(e) =>
+                              handleEventDressCodeChange(
+                                dressCodeEventType,
+                                'ladiesDescAr',
+                                e.target.value
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="admin-form-group">
+                          <label className="admin-label">
+                            Ladies Attire for {selectedEtMeta.nameEn} (English — optional)
+                          </label>
+                          <input
+                            type="text"
+                            className="admin-input"
+                            placeholder={
+                              isEditingWedding
+                                ? `Leave blank to auto-display ${selectedBrownShade.nameEn}`
+                                : currentEventDefaults.ladiesDescEn || ''
+                            }
+                            value={currentEventDc.ladiesDescEn || ''}
+                            onChange={(e) =>
+                              handleEventDressCodeChange(
+                                dressCodeEventType,
+                                'ladiesDescEn',
+                                e.target.value
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="admin-form-group">
+                          <label className="admin-label">
+                            ملاحظة الدريس كود لـ {selectedEtMeta.nameEn} (بالعربي — اختياري)
+                          </label>
+                          <input
+                            type="text"
+                            className="admin-input"
+                            placeholder={currentEventDefaults.noteDescAr || ''}
+                            value={currentEventDc.noteDescAr || ''}
+                            onChange={(e) =>
+                              handleEventDressCodeChange(
+                                dressCodeEventType,
+                                'noteDescAr',
+                                e.target.value
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="admin-form-group">
+                          <label className="admin-label">
+                            Dress Code Note for {selectedEtMeta.nameEn} (English — optional)
+                          </label>
+                          <input
+                            type="text"
+                            className="admin-input"
+                            placeholder={currentEventDefaults.noteDescEn || ''}
+                            value={currentEventDc.noteDescEn || ''}
+                            onChange={(e) =>
+                              handleEventDressCodeChange(
+                                dressCodeEventType,
+                                'noteDescEn',
+                                e.target.value
+                              )
+                            }
+                          />
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
 
               {/* Gifts / Wishlist */}
