@@ -395,10 +395,19 @@ console.log('✅ [Phase 3] All 10 Event Types, 6 Visual Themes, and base config 
   assert.equal(engagementDisplay.ladiesDesc, 'Engagement pastel dresses only');
   assert.ok(engagementDisplay.womenColors.length > 1, 'Engagement keeps its own palette');
 
-  // Switch to Corporate and verify Wedding brown shade does NOT leak
+  // Verify Engagement defaults in weddingConfig.js reflect classic men colors + ladies brown palette
+  const engagementDefaultDisplay = resolveDressCodeForDisplay(defaultRepoConfig, (k) => k, false);
+  assert.equal(engagementDefaultDisplay.eventType, 'engagement');
+  assert.equal(engagementDefaultDisplay.menColors.length, 5, 'Men keep classic 5-color palette');
+  assert.equal(engagementDefaultDisplay.selectedLadiesPreset?.id, 'brown-palette', 'Engagement uses bride brown palette');
+  assert.equal(engagementDefaultDisplay.womenColors.length, 6, 'Ladies brown palette renders all 6 brown swatches');
+  assert.equal(engagementDefaultDisplay.womenColors[0].hex, '#3B2417');
+
+  // Switch to Corporate and verify neither Wedding nor Engagement brown settings leak
   const corpCfg = mergeConfig({ ...weddingCfg, eventType: 'corporate' });
   const corpDisplay = resolveDressCodeForDisplay(corpCfg, (k) => k, false);
   assert.equal(corpDisplay.ladiesSolidShade, null, 'Wedding brown shade must NOT apply to Corporate');
+  assert.equal(corpDisplay.selectedLadiesPreset, null, 'Engagement brown palette must NOT leak into Corporate');
   assert.ok(!corpDisplay.ladiesDesc.includes('Espresso Brown'));
 
   // Change Wedding shade to 'caramel' and confirm persistence & isolation

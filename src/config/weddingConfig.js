@@ -66,7 +66,7 @@ const weddingConfig = {
 
     // Family Invitation Phrase (Auto-generated from family titles)
     invitationPhraseAr: "تتشرف عائلة مكرم وعائلة طلعت بدعوتكم لحضور حفل زفاف نجليهما",
-    invitationPhraseEn: "The Kouta Family & The Talaat Family cordially request the honor of your presence at the wedding of their children",
+    invitationPhraseEn: "The Makram Family & The Talaat Family cordially request the honor of your presence at the wedding of their children",
 
     /**
      * ─── WEDDING DATE & TIME ─────────────────────────────────
@@ -147,9 +147,6 @@ const weddingConfig = {
         "mapsEmbedUrl": "https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3410.037249054555!2d32.26310730965595!3d31.27506485911614!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x14f99dbd55e09f0f%3A0xef0bac4e358f865c!2z2YLYp9i52Kkg2KjYp9iq2LHZiNizINis2KfYsdiv2YYgfCBCYXRyb3MgR2FyZGVu!5e0!3m2!1sen!2seg!4v1795422477426!5m2!1sen!2seg"
     },
 
-    /**
-     * ─── MUSIC ───────────────────────────────────────────────
-     */
     music: {
         "enabled": true,
         "url": "/A5eern-hala2i.mp3",
@@ -194,6 +191,9 @@ const weddingConfig = {
         "noteDescAr": "",
         "noteDescEn": "",
         "byEventType": {
+            "engagement": {
+                "ladiesPalettePreset": "brown-palette"
+            },
             "wedding": {
                 "ladiesBrownShade": "chocolate"
             }

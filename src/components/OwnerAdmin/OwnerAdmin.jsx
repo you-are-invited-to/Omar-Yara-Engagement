@@ -46,7 +46,9 @@ import { DEFAULT_THEME_ID, WEDDING_THEMES, getThemeById } from '../../config/the
 import { EVENT_TYPES, DEFAULT_EVENT_TYPE_ID, getEventTypeById } from '../../config/eventTypesConfig';
 import {
   WEDDING_LADIES_BROWN_SHADES,
+  LADIES_PALETTE_PRESETS,
   getWeddingBrownShadeById,
+  getLadiesPalettePresetById,
   getDefaultDressCodeForEventType,
   normalizeDressCodeByEventType,
 } from '../../config/dressCodeConfig';
@@ -1829,55 +1831,108 @@ VITE_FIREBASE_APP_ID=${cust.firebaseAppId || ''}
                           </div>
                         </div>
                       ) : (
-                        <div
-                          style={{
-                            background: 'rgba(255, 255, 255, 0.03)',
-                            border: '1px solid rgba(255, 255, 255, 0.1)',
-                            borderRadius: '10px',
-                            padding: '0.85rem 1rem',
-                            marginBottom: '1rem',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            flexWrap: 'wrap',
-                            gap: '0.75rem',
-                          }}
-                        >
-                          <div style={{ fontSize: '0.84rem', color: '#c4b5a0', flex: '1 1 280px' }}>
-                            إعدادات الألوان الافتراضية لـ{' '}
-                            <strong style={{ color: '#f8f4ef' }}>{selectedEtMeta.nameEn}</strong>{' '}
-                            منفصلة تماماً عن خيار اللون البني الخاص بحفل الزفاف (Wedding).
-                            <div style={{ marginTop: '0.45rem' }}>
-                              <button
-                                type="button"
-                                onClick={() => setDressCodeEventType('wedding')}
-                                className="admin-btn admin-btn--outline admin-btn--sm"
-                                style={{ fontSize: '0.78rem', padding: '0.3rem 0.65rem' }}
-                              >
-                                <Palette size={14} />
-                                <span>عرض قائمة درجات البني لحفل الزفاف (Wedding Dropdown)</span>
-                              </button>
-                            </div>
-                          </div>
-                          {Array.isArray(currentEventDefaults.womenColors) && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                              {currentEventDefaults.womenColors.map((c, idx) => (
-                                <span
-                                  key={idx}
-                                  title={`${c.nameEn} (${c.nameAr})`}
+                        (() => {
+                          const activePresetId =
+                            currentEventDc.ladiesPalettePreset ||
+                            currentEventDefaults.ladiesPalettePreset ||
+                            'soft-pastels';
+                          const activePreset =
+                            getLadiesPalettePresetById(activePresetId) ||
+                            LADIES_PALETTE_PRESETS[0];
+                          const previewColors =
+                            activePreset?.colors || currentEventDefaults.womenColors || [];
+
+                          return (
+                            <div
+                              style={{
+                                background: 'rgba(212, 175, 55, 0.06)',
+                                border: '1px solid rgba(212, 175, 55, 0.25)',
+                                borderRadius: '12px',
+                                padding: '1.1rem',
+                                marginBottom: '1.1rem',
+                              }}
+                            >
+                              <div className="admin-form-grid-2" style={{ alignItems: 'center' }}>
+                                <div className="admin-form-group">
+                                  <label
+                                    htmlFor="event-ladies-palette-select"
+                                    className="admin-label"
+                                    style={{ color: '#d4af37', fontWeight: 700 }}
+                                  >
+                                    باليت ألوان السيدات لـ {selectedEtMeta.nameEn} (Ladies Color Palette)
+                                  </label>
+                                  <select
+                                    id="event-ladies-palette-select"
+                                    className="admin-input admin-select"
+                                    value={activePresetId}
+                                    onChange={(e) =>
+                                      handleEventDressCodeChange(
+                                        dressCodeEventType,
+                                        'ladiesPalettePreset',
+                                        e.target.value
+                                      )
+                                    }
+                                  >
+                                    {LADIES_PALETTE_PRESETS.map((preset) => (
+                                      <option key={preset.id} value={preset.id}>
+                                        {preset.nameEn} — {preset.nameAr}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <small style={{ color: '#a89f91', marginTop: '0.35rem', display: 'block' }}>
+                                    مستقل تماماً عن إعدادات حفل الزفاف (Wedding) والمناسبات الأخرى.
+                                  </small>
+                                </div>
+
+                                <div
                                   style={{
-                                    width: '20px',
-                                    height: '20px',
-                                    borderRadius: '50%',
-                                    backgroundColor: c.hex,
-                                    border: '1px solid rgba(255,255,255,0.4)',
-                                    display: 'inline-block',
+                                    background: 'rgba(18, 16, 14, 0.65)',
+                                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                                    borderRadius: '10px',
+                                    padding: '0.85rem 1rem',
                                   }}
-                                />
-                              ))}
+                                >
+                                  <div style={{ color: '#f8f4ef', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.5rem' }}>
+                                    {activePreset.nameEn} · {activePreset.nameAr}
+                                  </div>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+                                    {previewColors.map((c, idx) => (
+                                      <div
+                                        key={idx}
+                                        title={`${c.nameEn} (${c.nameAr})`}
+                                        style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.76rem', color: '#c4b5a0' }}
+                                      >
+                                        <span
+                                          style={{
+                                            width: '22px',
+                                            height: '22px',
+                                            borderRadius: '50%',
+                                            backgroundColor: c.hex,
+                                            border: '1.5px solid rgba(255,255,255,0.55)',
+                                            display: 'inline-block',
+                                          }}
+                                        />
+                                        <span>{c.nameEn}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div style={{ marginTop: '0.75rem', paddingTop: '0.65rem', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => setDressCodeEventType('wedding')}
+                                  className="admin-btn admin-btn--outline admin-btn--sm"
+                                  style={{ fontSize: '0.78rem', padding: '0.3rem 0.65rem' }}
+                                >
+                                  <Palette size={14} />
+                                  <span>عرض قائمة درجة البني السادة الخاصة بحفل الزفاف (Wedding Dropdown)</span>
+                                </button>
+                              </div>
                             </div>
-                          )}
-                        </div>
+                          );
+                        })()
                       )}
 
                       {/* Event-Type-Specific Extensible Text Overrides */}

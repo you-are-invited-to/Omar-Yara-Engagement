@@ -3,10 +3,10 @@
  * EVENT-SPECIFIC DRESS CODE CONFIGURATION
  * ============================================================================
  * Keeps dress code options cleanly isolated per event type (wedding, engagement,
- * birthday, graduation, corporate, etc.) so Wedding-specific rules (such as the
- * permitted solid brown shade for ladies) never apply to other event types.
+ * birthday, graduation, corporate, etc.) so each event type maintains its own
+ * independent palette and rules without leaking into other event types.
  *
- * Easily extensible: add additional event-specific fields or option catalogs
+ * Easily extensible: add additional palette presets or event-specific fields
  * per eventType key without modifying unrelated components.
  * ============================================================================
  */
@@ -31,9 +31,8 @@ export const DEFAULT_WOMEN_PASTEL_COLORS = [
 ];
 
 /**
- * Permitted solid brown shades for ladies at Wedding events.
- * Admin selects one via dropdown in Owner Admin; persisted in Firestore under
- * `config/wedding -> dressCode.byEventType.wedding.ladiesBrownShade`.
+ * Permitted solid brown shades for ladies (used individually for Wedding's
+ * single-shade selector and together as the Brown Shades Palette preset).
  */
 export const WEDDING_LADIES_BROWN_SHADES = [
   {
@@ -86,6 +85,96 @@ export const WEDDING_LADIES_BROWN_SHADES = [
   },
 ];
 
+export const DEFAULT_WOMEN_BROWN_COLORS = WEDDING_LADIES_BROWN_SHADES.map((s) => ({
+  hex: s.hex,
+  nameAr: s.nameAr,
+  nameEn: s.nameEn,
+}));
+
+/**
+ * Selectable Ladies Color Palette presets for non-wedding event types
+ * (Engagement, Birthday, Graduation, Corporate, etc.).
+ * Persisted under `dressCode.byEventType[eventType].ladiesPalettePreset`.
+ */
+export const LADIES_PALETTE_PRESETS = [
+  {
+    id: 'brown-palette',
+    nameEn: 'Warm Brown Palette',
+    nameAr: 'درجات البني الدافئة (Brown Palette)',
+    ladiesDescEn:
+      'Elegant dresses in rich, warm solid brown shades (Espresso, Dark Chocolate, Warm Chestnut, Mocha, Soft Cocoa, Warm Caramel)',
+    ladiesDescAr:
+      'فساتين أنيقة بدرجات اللون البني السادة الدافئة (إسبريسو، شوكولاتة داكن، كستنائي، موكا، كاكاو، كراميل)',
+    colors: DEFAULT_WOMEN_BROWN_COLORS,
+  },
+  {
+    id: 'soft-pastels',
+    nameEn: 'Soft Pastel Palette',
+    nameAr: 'ألوان الباستيل الهادئة (Soft Pastels)',
+    ladiesDescEn:
+      'Elegant dresses in delicate, soft pastel shades (Blush Pink, Dusty Rose, Soft Sage, Lavender, Baby Blue, Champagne)',
+    ladiesDescAr:
+      'فساتين أنيقة بألوان الباستيل الهادئة والرقيقة (وردي باستيل، روز هادئ، ميرمية، لافندر، بيبي بلو، شامبين)',
+    colors: DEFAULT_WOMEN_PASTEL_COLORS,
+  },
+  {
+    id: 'champagne-neutrals',
+    nameEn: 'Champagne & Earthy Neutrals',
+    nameAr: 'شامبين وألوان ترابية هادئة',
+    ladiesDescEn:
+      'Refined dresses in warm champagne, sand, taupe, and soft neutral shades',
+    ladiesDescAr:
+      'فساتين راقية بدرجات الشامبين والبيج الدافئ والألوان الترابية الهادئة',
+    colors: [
+      { hex: '#F5E2CE', nameAr: 'شامبين', nameEn: 'Champagne' },
+      { hex: '#D6C5B3', nameAr: 'بيج دافئ', nameEn: 'Warm Beige' },
+      { hex: '#C2A88B', nameAr: 'رملي ذهبي', nameEn: 'Golden Sand' },
+      { hex: '#A88B68', nameAr: 'لاتيه', nameEn: 'Latte / Taupe' },
+      { hex: '#8D6E63', nameAr: 'كاكاو هادئ', nameEn: 'Soft Cocoa' },
+    ],
+  },
+  {
+    id: 'jewel-tones',
+    nameEn: 'Classic Jewel Tones',
+    nameAr: 'ألوان الجواهر الفاخرة',
+    ladiesDescEn:
+      'Evening dresses in rich jewel tones (Emerald, Burgundy, Royal Navy, Plum, Antique Gold)',
+    ladiesDescAr:
+      'فساتين سهرة فاخرة بألوان الجواهر (زمردي، عنابي، كحلي ملكي، برقوقي، ذهبي)',
+    colors: [
+      { hex: '#1B4D3E', nameAr: 'أخضر زمردي', nameEn: 'Emerald' },
+      { hex: '#6B1D2F', nameAr: 'عنابي داكن', nameEn: 'Burgundy' },
+      { hex: '#1B2A4A', nameAr: 'كحلي ملكي', nameEn: 'Royal Navy' },
+      { hex: '#4A2545', nameAr: 'برقوقي', nameEn: 'Deep Plum' },
+      { hex: '#A6895B', nameAr: 'ذهبي عتيق', nameEn: 'Antique Gold' },
+    ],
+  },
+  {
+    id: 'executive-neutrals',
+    nameEn: 'Executive Formal Tones',
+    nameAr: 'ألوان رسمية للأعمال',
+    ladiesDescEn:
+      'Business formal or tailored evening attire in refined executive tones',
+    ladiesDescAr:
+      'إطلالة رسمية أنيقة للأعمال أو المساء بألوان راقية ومحايدة',
+    colors: [
+      { hex: '#1B2A4A', nameAr: 'كحلي رسمي', nameEn: 'Executive Navy' },
+      { hex: '#3A3D40', nameAr: 'رمادي فحمي', nameEn: 'Charcoal' },
+      { hex: '#D6C5B3', nameAr: 'بيج كلاسيكي', nameEn: 'Classic Beige' },
+      { hex: '#2F4F4F', nameAr: 'أخضر زمردي داكن', nameEn: 'Deep Slate' },
+    ],
+  },
+];
+
+export const isValidLadiesPalettePresetId = (presetId) => {
+  if (!presetId || typeof presetId !== 'string') return false;
+  return LADIES_PALETTE_PRESETS.some((p) => p.id === presetId);
+};
+
+export const getLadiesPalettePresetById = (presetId) => {
+  return LADIES_PALETTE_PRESETS.find((p) => p.id === presetId) || null;
+};
+
 export const DEFAULT_WEDDING_BROWN_SHADE_ID = 'mocha';
 
 export const isValidWeddingBrownShadeId = (shadeId) => {
@@ -103,8 +192,8 @@ export const getWeddingBrownShadeById = (shadeId) => {
 
 /**
  * Independent dress code defaults per event type.
- * Only `wedding` defines `ladiesBrownShade` and enforces the wedding solid brown
- * shade selector; all other event types stay strictly separate.
+ * Only `wedding` defines `ladiesBrownShade` (single solid brown shade selector);
+ * all other event types stay strictly separate and can choose their own palette preset.
  */
 export const EVENT_DRESS_CODE_DEFAULTS = {
   wedding: {
@@ -122,6 +211,7 @@ export const EVENT_DRESS_CODE_DEFAULTS = {
       'نرجو لطفاً تجنب ارتداء اللون الأبيض الناصع أو الأوف وايت لإبراز إطلالة العروس.',
   },
   engagement: {
+    ladiesPalettePreset: 'soft-pastels',
     menColors: DEFAULT_MEN_COLORS,
     womenColors: DEFAULT_WOMEN_PASTEL_COLORS,
     gentlemenDescEn:
@@ -140,6 +230,7 @@ export const EVENT_DRESS_CODE_DEFAULTS = {
       'نرجو لطفاً تجنب ارتداء اللون الأبيض الناصع أو الأوف وايت لإبراز إطلالة العروس.',
   },
   birthday: {
+    ladiesPalettePreset: 'soft-pastels',
     menColors: DEFAULT_MEN_COLORS,
     womenColors: DEFAULT_WOMEN_PASTEL_COLORS,
     gentlemenDescEn: 'Smart casual or festive evening attire in comfortable classic tones',
@@ -152,6 +243,7 @@ export const EVENT_DRESS_CODE_DEFAULTS = {
     noteDescAr: 'ارتدوا ما يشعركم بالراحة والأناقة للاستمتاع بالاحتفال!',
   },
   graduation: {
+    ladiesPalettePreset: 'soft-pastels',
     menColors: DEFAULT_MEN_COLORS,
     womenColors: DEFAULT_WOMEN_PASTEL_COLORS,
     gentlemenDescEn: 'Semi-formal suits or smart blazers in classic dark or neutral tones',
@@ -164,6 +256,7 @@ export const EVENT_DRESS_CODE_DEFAULTS = {
     noteDescAr: 'يُفضل ارتداء ملابس شبه رسمية لالتقاط الصور التذكارية والاحتفال.',
   },
   corporate: {
+    ladiesPalettePreset: 'executive-neutrals',
     menColors: DEFAULT_MEN_COLORS.slice(0, 3),
     womenColors: [
       { hex: '#1B2A4A', nameAr: 'كحلي رسمي', nameEn: 'Executive Navy' },
@@ -181,6 +274,7 @@ export const EVENT_DRESS_CODE_DEFAULTS = {
     noteDescAr: 'نرجو الالتزام بالزي الرسمي للأعمال (Business Formal) لجميع الضيوف.',
   },
   conference: {
+    ladiesPalettePreset: 'executive-neutrals',
     menColors: DEFAULT_MEN_COLORS.slice(0, 4),
     womenColors: [
       { hex: '#1B2A4A', nameAr: 'كحلي', nameEn: 'Navy' },
@@ -222,8 +316,11 @@ export const normalizeDressCodeByEventType = (rawByEventType = {}) => {
           ? etVal.ladiesBrownShade
           : DEFAULT_WEDDING_BROWN_SHADE_ID;
       } else {
-        // Never carry wedding's ladiesBrownShade into other event types
+        // Never carry wedding's single-shade ladiesBrownShade into other event types
         delete cleaned.ladiesBrownShade;
+        if (cleaned.ladiesPalettePreset && !isValidLadiesPalettePresetId(cleaned.ladiesPalettePreset)) {
+          delete cleaned.ladiesPalettePreset;
+        }
       }
       result[etKey] = cleaned;
     }
@@ -287,13 +384,18 @@ export const resolveDressCodeForDisplay = (config = {}, t = (k) => k, isAr = fal
     ? getWeddingBrownShadeById(eventDc.ladiesBrownShade)
     : null;
 
+  // Non-wedding event-specific ladies palette preset (e.g. Engagement -> 'brown-palette')
+  const selectedLadiesPreset = !isWedding && eventDc.ladiesPalettePreset
+    ? getLadiesPalettePresetById(eventDc.ladiesPalettePreset)
+    : null;
+
   const defaultLadiesDescAr = isWedding && ladiesSolidShade
     ? `فساتين سادة أنيقة بدرجة ${ladiesSolidShade.nameAr} (${ladiesSolidShade.descriptionAr})`
-    : eventDefaults.ladiesDescAr || t('dressCode.ladiesDesc');
+    : selectedLadiesPreset?.ladiesDescAr || eventDefaults.ladiesDescAr || t('dressCode.ladiesDesc');
 
   const defaultLadiesDescEn = isWedding && ladiesSolidShade
     ? `Elegant solid dresses in ${ladiesSolidShade.nameEn} (${ladiesSolidShade.descriptionEn})`
-    : eventDefaults.ladiesDescEn || t('dressCode.ladiesDesc');
+    : selectedLadiesPreset?.ladiesDescEn || eventDefaults.ladiesDescEn || t('dressCode.ladiesDesc');
 
   const ladiesDesc = isAr
     ? eventDc.ladiesDescAr || dc.ladiesDescAr || defaultLadiesDescAr
@@ -327,9 +429,11 @@ export const resolveDressCodeForDisplay = (config = {}, t = (k) => k, isAr = fal
       ]
     : Array.isArray(eventDc.womenColors) && eventDc.womenColors.length > 0
       ? eventDc.womenColors
-      : Array.isArray(dc.womenColors) && dc.womenColors.length > 0
-        ? dc.womenColors
-        : eventDefaults.womenColors || DEFAULT_WOMEN_PASTEL_COLORS;
+      : selectedLadiesPreset?.colors
+        ? selectedLadiesPreset.colors
+        : Array.isArray(dc.womenColors) && dc.womenColors.length > 0
+          ? dc.womenColors
+          : eventDefaults.womenColors || DEFAULT_WOMEN_PASTEL_COLORS;
 
   const paletteLabelLadies =
     isWedding && ladiesSolidShade
@@ -354,6 +458,7 @@ export const resolveDressCodeForDisplay = (config = {}, t = (k) => k, isAr = fal
     menColors,
     womenColors,
     ladiesSolidShade,
+    selectedLadiesPreset,
     paletteLabelLadies,
   };
 };
